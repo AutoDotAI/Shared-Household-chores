@@ -168,6 +168,25 @@ class ChoreRecurrenceTests(TestCase):
                 rule = occurrence.series.rule
                 self.assertEqual((rule.frequency, rule.interval, rule.weekdays, rule.day_of_month), (frequency, interval, weekdays, day_of_month))
 
+    def test_monthly_days_29_and_30_are_valid(self):
+        for day in (29, 30):
+            with self.subTest(day=day):
+                self.post_chore({"title": f"Monthly day {day}", "recurrence": "monthly", "interval": "1", "day_of_month": str(day)})
+                occurrence = Chore.objects.get(title=f"Monthly day {day}")
+                self.assertEqual(occurrence.series.rule.day_of_month, day)
+
+    def test_first_occurrence_keeps_the_selected_due_date_as_its_anchor(self):
+        self.post_chore({
+            "title": "Anchored monthly chore",
+            "due_date": "2026-10-31",
+            "recurrence": "monthly",
+            "interval": "1",
+            "day_of_month": "31",
+        })
+        occurrence = Chore.objects.get(title="Anchored monthly chore")
+        self.assertEqual(str(occurrence.due_date), "2026-10-31")
+        self.assertEqual(occurrence.series.occurrences.count(), 1)
+
     def test_one_off_chore_has_no_rule_or_series(self):
         self.post_chore()
         chore = Chore.objects.get()
@@ -207,6 +226,32 @@ class ChoreRecurrenceTests(TestCase):
         self.assertEqual(occurrence.due_date, original_due_date)
         self.assertEqual(occurrence.series_id, series.pk)
         self.assertEqual((series.rule.frequency, series.rule.interval, series.rule.day_of_month), ("monthly", 2, 15))
+
+    def test_editing_series_rule_preserves_completed_occurrence_history(self):
+        self.post_chore({"recurrence": "weekly", "interval": "1", "weekdays": ["1"]})
+        occurrence = Chore.objects.get()
+        completed_at = timezone.now()
+        occurrence.status = Chore.DONE
+        occurrence.completed_at = completed_at
+        occurrence.completed_by = self.member
+        occurrence.save(update_fields=["status", "completed_at", "completed_by"])
+
+        response = self.client.post(reverse("chore-edit", args=[occurrence.pk]), {
+            "title": occurrence.title,
+            "due_date": str(occurrence.due_date),
+            "assignee": "",
+            "recurrence": "monthly",
+            "interval": "2",
+            "day_of_month": "29",
+            "weekdays": [],
+        })
+
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        occurrence.refresh_from_db()
+        self.assertEqual(occurrence.status, Chore.DONE)
+        self.assertEqual(occurrence.completed_at, completed_at)
+        self.assertEqual(occurrence.completed_by, self.member)
+        self.assertEqual((occurrence.series.rule.frequency, occurrence.series.rule.day_of_month), ("monthly", 29))
 
     def test_members_cannot_create_or_edit_recurrence(self):
         self.client.force_login(self.member)
