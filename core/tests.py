@@ -222,6 +222,158 @@ class HouseholdTests(TestCase):
         self.assertEqual(self.client.get(url).status_code, 404)
 
 
+class HouseholdSettingsTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user("admin@example.com")
+        self.member = User.objects.create_user("member@example.com")
+        self.other_admin = User.objects.create_user("other-admin@example.com")
+        self.outsider = User.objects.create_user("outsider@example.com")
+        self.household = Household.objects.create(name="Flat 12")
+        self.other_household = Household.objects.create(name="Other flat")
+        self.admin_membership = HouseholdMember.objects.create(
+            household=self.household, user=self.admin, role=HouseholdMember.ADMIN
+        )
+        self.member_membership = HouseholdMember.objects.create(
+            household=self.household, user=self.member, role=HouseholdMember.MEMBER
+        )
+        HouseholdMember.objects.create(
+            household=self.other_household, user=self.other_admin, role=HouseholdMember.ADMIN
+        )
+        HouseholdMember.objects.create(household=self.other_household, user=self.member)
+        self.url = reverse("household-settings", args=[self.household.pk])
+
+    def post(self, data):
+        self.client.force_login(self.admin)
+        return self.client.post(self.url, data)
+
+    def test_settings_lists_household_name_and_all_member_emails_and_roles(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Flat 12")
+        self.assertContains(response, "admin@example.com")
+        self.assertContains(response, "Admin")
+        self.assertContains(response, "member@example.com")
+        self.assertContains(response, "Member")
+
+    def test_rename_trims_whitespace_and_rejects_blank_names(self):
+        response = self.post({"action": "rename", "name": "  New flat  "})
+        self.assertRedirects(response, self.url)
+        self.household.refresh_from_db()
+        self.assertEqual(self.household.name, "New flat")
+        for name in ("", "   ", "\t\n"):
+            with self.subTest(name=name):
+                response = self.post({"action": "rename", "name": name})
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "role=\"alert\"")
+                self.household.refresh_from_db()
+                self.assertEqual(self.household.name, "New flat")
+
+    def test_both_role_transitions_are_saved(self):
+        response = self.post({"action": "change_role", "member_id": self.member_membership.pk, "role": "admin"})
+        self.assertRedirects(response, self.url)
+        self.member_membership.refresh_from_db()
+        self.assertEqual(self.member_membership.role, HouseholdMember.ADMIN)
+        response = self.post({"action": "change_role", "member_id": self.member_membership.pk, "role": "member"})
+        self.assertRedirects(response, self.url)
+        self.member_membership.refresh_from_db()
+        self.assertEqual(self.member_membership.role, HouseholdMember.MEMBER)
+
+    def test_removing_member_unassigns_only_todo_chores_in_this_household(self):
+        past = timezone.localdate() - timedelta(days=2)
+        overdue = Chore.objects.create(
+            household=self.household, title="Overdue", assignee=self.member, due_date=past, created_by=self.admin
+        )
+        done = Chore.objects.create(
+            household=self.household, title="Done", assignee=self.member, due_date=past,
+            status=Chore.DONE, completed_at=timezone.now(), completed_by=self.admin, created_by=self.admin,
+        )
+        other = Chore.objects.create(
+            household=self.other_household, title="Other chore", assignee=self.member, due_date=past,
+            created_by=self.other_admin,
+        )
+        completion = (done.completed_at, done.completed_by_id)
+        response = self.post({"action": "remove_member", "member_id": self.member_membership.pk})
+        self.assertRedirects(response, self.url)
+        self.assertFalse(HouseholdMember.objects.filter(pk=self.member_membership.pk).exists())
+        overdue.refresh_from_db()
+        done.refresh_from_db()
+        other.refresh_from_db()
+        self.assertIsNone(overdue.assignee)
+        self.assertEqual(done.assignee_id, self.member.pk)
+        self.assertEqual((done.completed_at, done.completed_by_id), completion)
+        self.assertEqual(other.assignee_id, self.member.pk)
+        board = self.client.get(reverse("household-detail", args=[self.household.pk]))
+        self.assertContains(board, "Overdue")
+        self.client.force_login(self.member)
+        self.assertEqual(self.client.get(reverse("household-detail", args=[self.household.pk])).status_code, 404)
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+        self.assertEqual(self.client.post(self.url, {
+            "action": "rename", "name": "Changed after removal",
+        }).status_code, 404)
+
+    def test_admin_can_remove_themselves_if_another_admin_remains(self):
+        second = HouseholdMember.objects.create(
+            household=self.household, user=self.other_admin, role=HouseholdMember.ADMIN
+        )
+        response = self.post({"action": "remove_member", "member_id": self.admin_membership.pk})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], self.url)
+        self.assertFalse(HouseholdMember.objects.filter(pk=self.admin_membership.pk).exists())
+        self.assertTrue(HouseholdMember.objects.filter(pk=second.pk, role=HouseholdMember.ADMIN).exists())
+
+    def test_last_admin_cannot_be_demoted_or_removed(self):
+        self.member_membership.delete()
+        chore = Chore.objects.create(
+            household=self.household, title="Keep assigned", assignee=self.admin,
+            due_date=timezone.localdate(), created_by=self.admin,
+        )
+        for data in (
+            {"action": "change_role", "member_id": self.admin_membership.pk, "role": "member"},
+            {"action": "remove_member", "member_id": self.admin_membership.pk},
+        ):
+            with self.subTest(data=data):
+                response = self.post(data)
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "at least one admin")
+                self.assertTrue(HouseholdMember.objects.filter(pk=self.admin_membership.pk, role="admin").exists())
+                chore.refresh_from_db()
+                self.assertEqual(chore.assignee_id, self.admin.pk)
+
+    def test_members_and_nonmembers_cannot_access_management_or_change_data(self):
+        original_name = self.household.name
+        for user in (self.member, self.outsider, self.other_admin):
+            with self.subTest(user=user.email):
+                self.client.force_login(user)
+                self.assertEqual(self.client.get(self.url).status_code, 404)
+                self.assertEqual(self.client.post(self.url, {"action": "rename", "name": "Hacked"}).status_code, 404)
+                self.assertEqual(self.client.post(self.url, {
+                    "action": "change_role", "member_id": self.member_membership.pk, "role": "admin",
+                }).status_code, 404)
+                self.assertEqual(self.client.post(self.url, {
+                    "action": "remove_member", "member_id": self.member_membership.pk,
+                }).status_code, 404)
+        self.household.refresh_from_db()
+        self.assertEqual(self.household.name, original_name)
+        self.assertTrue(HouseholdMember.objects.filter(pk=self.member_membership.pk).exists())
+
+    def test_unknown_member_and_other_household_membership_cannot_be_changed(self):
+        other_membership = HouseholdMember.objects.get(household=self.other_household, user=self.member)
+        self.client.force_login(self.admin)
+        for pk in (other_membership.pk, 999999):
+            response = self.client.post(self.url, {
+                "action": "remove_member", "member_id": pk,
+            })
+            self.assertEqual(response.status_code, 200)
+        self.assertTrue(HouseholdMember.objects.filter(pk=other_membership.pk).exists())
+
+    def test_management_changes_require_post(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.put(self.url, {"action": "rename", "name": "Nope"}).status_code, 405)
+        self.household.refresh_from_db()
+        self.assertEqual(self.household.name, "Flat 12")
+
+
 class ChoreBoardTests(TestCase):
     def setUp(self):
         self.admin = User.objects.create_user("alice@example.com")

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ household.name }} settings</title>
+  </head>
+  <body>
+    <main>
+      <h1>Household settings</h1>
+      <p><a href="{% url 'household-detail' household.pk %}">Back to board</a></p>
+      {% if error %}<p role="alert">{{ error }}</p>{% endif %}
+      <section>
+        <h2>Household name</h2>
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="rename">
+          {{ form.name.label_tag }} {{ form.name }}
+          {% for error in form.name.errors %}<p role="alert">{{ error }}</p>{% endfor %}
+          <button type="submit">Save name</button>
+        </form>
+      </section>
+      <section>
+        <h2>Members</h2>
+        <ul>
+          {% for membership in members %}
+            <li>
+              {{ membership.user.email }} — {{ membership.get_role_display }}
+              <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="change_role">
+                <input type="hidden" name="member_id" value="{{ membership.pk }}">
+                <label>Role
+                  <select name="role">
+                    <option value="member" {% if membership.role == 'member' %}selected{% endif %}>Member</option>
+                    <option value="admin" {% if membership.role == 'admin' %}selected{% endif %}>Admin</option>
+                  </select>
+                </label>
+                <button type="submit">Save role</button>
+              </form>
+              <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="remove_member">
+                <input type="hidden" name="member_id" value="{{ membership.pk }}">
+                <button type="submit">Remove member</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

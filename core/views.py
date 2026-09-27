@@ -11,10 +11,10 @@ from django.db import transaction
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_http_methods, require_POST
 from django.utils import timezone
 
-from .forms import ChoreForm, HouseholdCreateForm, InvitationForm, SignInRequestForm
+from .forms import ChoreForm, HouseholdCreateForm, HouseholdSettingsForm, InvitationForm, SignInRequestForm
 from .models import Chore, Household, HouseholdMember, Invitation, SignInLink
 from .services import claim_chore, complete_chore
 
@@ -177,6 +177,80 @@ def invite_member(request, household_id):
     else:
         form = InvitationForm()
     return render(request, "core/invitation_form.html", {"form": form, "household": household})
+
+
+@login_required(login_url="sign-in")
+@require_http_methods(["GET", "POST"])
+def household_settings(request, household_id):
+    household = _admin_household_or_404(request.user, household_id)
+    error = None
+    if request.method == "POST":
+        action = request.POST.get("action")
+        if action == "rename":
+            form = HouseholdSettingsForm(request.POST, instance=household)
+            if form.is_valid():
+                with transaction.atomic():
+                    locked_household = Household.objects.select_for_update().get(pk=household.pk)
+                    if not HouseholdMember.objects.filter(
+                        household=locked_household, user=request.user, role=HouseholdMember.ADMIN
+                    ).exists():
+                        raise Http404
+                    locked_household.name = form.cleaned_data["name"]
+                    locked_household.save(update_fields=["name"])
+                return redirect("household-settings", household_id=household.pk)
+        else:
+            form = HouseholdSettingsForm(instance=household)
+            try:
+                with transaction.atomic():
+                    # Serializing changes on the household row prevents two admins
+                    # from independently removing/demoting the last admin.
+                    locked_household = Household.objects.select_for_update().get(pk=household.pk)
+                    actor = HouseholdMember.objects.filter(
+                        household=locked_household, user=request.user, role=HouseholdMember.ADMIN
+                    ).first()
+                    if actor is None:
+                        raise Http404
+                    membership = HouseholdMember.objects.select_for_update().get(
+                        pk=request.POST.get("member_id"), household=locked_household
+                    )
+                    if action == "change_role":
+                        role = request.POST.get("role")
+                        if role not in (HouseholdMember.ADMIN, HouseholdMember.MEMBER):
+                            error = "Choose a valid role."
+                        elif membership.role == HouseholdMember.ADMIN and role == HouseholdMember.MEMBER and not HouseholdMember.objects.filter(
+                            household=locked_household, role=HouseholdMember.ADMIN
+                        ).exclude(pk=membership.pk).exists():
+                            error = "A household must have at least one admin."
+                        else:
+                            membership.role = role
+                            membership.save(update_fields=["role"])
+                    elif action == "remove_member":
+                        if membership.role == HouseholdMember.ADMIN and not HouseholdMember.objects.filter(
+                            household=locked_household, role=HouseholdMember.ADMIN
+                        ).exclude(pk=membership.pk).exists():
+                            error = "A household must have at least one admin."
+                        else:
+                            Chore.objects.filter(
+                                household=locked_household,
+                                assignee=membership.user,
+                                status=Chore.TODO,
+                            ).update(assignee=None)
+                            membership.delete()
+                    else:
+                        error = "Choose a valid action."
+            except (HouseholdMember.DoesNotExist, ValueError, TypeError):
+                error = "That household member could not be found."
+            if error is None:
+                return redirect("household-settings", household_id=household.pk)
+    else:
+        form = HouseholdSettingsForm(instance=household)
+    members = HouseholdMember.objects.filter(household=household).select_related("user").order_by("joined_at", "pk")
+    return render(request, "core/household_settings.html", {
+        "household": household,
+        "members": members,
+        "form": form,
+        "error": error,
+    })
 
 
 def accept_invitation(request, token):

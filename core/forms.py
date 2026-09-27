@@ -26,6 +26,18 @@ class HouseholdCreateForm(forms.ModelForm):
         return name
 
 
+class HouseholdSettingsForm(forms.ModelForm):
+    class Meta:
+        model = Household
+        fields = ["name"]
+
+    def clean_name(self):
+        name = self.cleaned_data["name"].strip()
+        if not name:
+            raise forms.ValidationError("A household name is required.")
+        return name
+
+
 class ChoreForm(forms.ModelForm):
     class Meta:
         model = Chore
