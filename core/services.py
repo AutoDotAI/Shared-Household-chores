@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from django.db import OperationalError, transaction
 from django.utils import timezone
 
-from .models import Chore, HouseholdMember, RecurrenceRule
+from .models import Chore, ChoreSeries, HouseholdMember, RecurrenceRule
 
 
 def _next_due_date(chore):
@@ -112,4 +112,56 @@ def complete_chore(*, chore_id, user):
                     due_date=_next_due_date(chore),
                     created_by_id=chore.created_by_id,
                 )
+        return True
+
+
+def delete_recurring_occurrence(*, chore_id, user, end_series=False):
+    """Skip one pending occurrence or end its series, for a household admin."""
+    chore = Chore.objects.filter(pk=chore_id, status=Chore.TODO, series__isnull=False).first()
+    if chore is None:
+        return False
+
+    if not HouseholdMember.objects.filter(
+        household_id=chore.household_id,
+        user=user,
+        role=HouseholdMember.ADMIN,
+    ).exists():
+        return False
+
+    with transaction.atomic():
+        series = ChoreSeries.objects.select_for_update().filter(
+            pk=chore.series_id,
+            household_id=chore.household_id,
+        ).first()
+        pending = Chore.objects.select_for_update().filter(
+            pk=chore_id,
+            household_id=chore.household_id,
+            series=series,
+            status=Chore.TODO,
+        ).select_related("series__rule").first() if series else None
+        if pending is None:
+            return False
+
+        if end_series:
+            # SET_NULL keeps completed occurrences available to household history.
+            Chore.objects.filter(
+                series=series,
+                household_id=pending.household_id,
+                status=Chore.TODO,
+            ).delete()
+            series.delete()
+            return True
+
+        next_date = _next_due_date(pending)
+        # Insert before deleting so the original occurrence remains the schedule
+        # anchor while _next_due_date is calculated for weekly/monthly rules.
+        Chore.objects.create(
+            household_id=pending.household_id,
+            series=series,
+            title=pending.title,
+            assignee_id=pending.assignee_id,
+            due_date=next_date,
+            created_by_id=pending.created_by_id,
+        )
+        pending.delete()
         return True

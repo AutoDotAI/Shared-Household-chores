@@ -389,6 +389,71 @@ class ChoreRecurrenceTests(TestCase):
         self.assertEqual(occurrence.series.occurrences.filter(status=Chore.TODO).count(), 1)
         self.assertEqual(occurrence.series.occurrences.get(status=Chore.TODO).pk, existing.pk)
 
+    def test_admin_can_delete_one_occurrence_and_create_its_next_scheduled_date(self):
+        occurrence = self.make_occurrence(date(2026, 3, 1), RecurrenceRule.DAILY, interval=2, assignee=self.member)
+        url = reverse("chore-delete", args=[occurrence.pk])
+
+        response = self.client.get(url)
+        self.assertContains(response, "Delete this occurrence only")
+        response = self.client.post(url, {"action": "delete_occurrence"})
+
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        self.assertFalse(Chore.objects.filter(pk=occurrence.pk).exists())
+        successor = Chore.objects.get(series=occurrence.series)
+        self.assertEqual(successor.due_date, date(2026, 3, 3))
+        self.assertEqual(successor.status, Chore.TODO)
+        self.assertEqual(successor.assignee_id, self.member.pk)
+
+    def test_admin_can_end_series_and_completed_history_is_preserved(self):
+        completed = self.make_occurrence(date(2026, 3, 1), RecurrenceRule.DAILY)
+        completed.status = Chore.DONE
+        completed.completed_at = timezone.now()
+        completed.completed_by = self.member
+        completed.save(update_fields=["status", "completed_at", "completed_by"])
+        pending = Chore.objects.create(
+            household=self.household, series=completed.series, title=completed.title,
+            due_date=date(2026, 3, 2), created_by=self.admin,
+        )
+        future = Chore.objects.create(
+            household=self.household, series=completed.series, title=completed.title,
+            due_date=date(2026, 3, 3), created_by=self.admin,
+        )
+
+        response = self.client.post(reverse("chore-delete", args=[pending.pk]), {"action": "end_series"})
+
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        self.assertFalse(Chore.objects.filter(pk=pending.pk).exists())
+        self.assertFalse(Chore.objects.filter(pk=future.pk).exists())
+        completed.refresh_from_db()
+        self.assertEqual(completed.status, Chore.DONE)
+        self.assertIsNone(completed.series_id)
+        self.assertEqual(completed.completed_by_id, self.member.pk)
+        self.assertIsNotNone(completed.completed_at)
+        history = self.client.get(
+            reverse("household-detail", args=[self.household.pk]), {"status": Chore.DONE}
+        )
+        self.assertContains(history, "Recurring task")
+        self.assertContains(history, self.member.email)
+
+    def test_member_and_other_household_admin_cannot_delete_series(self):
+        occurrence = self.make_occurrence(date(2026, 3, 1), RecurrenceRule.DAILY)
+        url = reverse("chore-delete", args=[occurrence.pk])
+        self.client.force_login(self.member)
+        self.assertEqual(self.client.post(url, {"action": "end_series"}).status_code, 404)
+        occurrence.refresh_from_db()
+        self.assertTrue(ChoreSeries.objects.filter(pk=occurrence.series_id).exists())
+
+        other_admin = User.objects.create_user("other-admin@example.com")
+        other_household = Household.objects.create(name="Elsewhere")
+        HouseholdMember.objects.create(
+            household=other_household, user=other_admin, role=HouseholdMember.ADMIN,
+        )
+        self.client.force_login(other_admin)
+        self.assertEqual(self.client.post(url, {"action": "delete_occurrence"}).status_code, 404)
+        occurrence.refresh_from_db()
+        self.assertTrue(ChoreSeries.objects.filter(pk=occurrence.series_id).exists())
+        self.assertEqual(Chore.objects.filter(series=occurrence.series).count(), 1)
+
 
 class UserModelTests(TestCase):
     def test_user_can_be_created_with_email_without_username(self):

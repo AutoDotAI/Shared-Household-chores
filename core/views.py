@@ -17,7 +17,7 @@ from django.utils import timezone
 
 from .forms import ChoreForm, HouseholdCreateForm, HouseholdSettingsForm, InvitationForm, SignInRequestForm
 from .models import Chore, Household, HouseholdMember, Invitation, SignInLink
-from .services import claim_chore, complete_chore
+from .services import claim_chore, complete_chore, delete_recurring_occurrence
 
 
 def home(request):
@@ -137,10 +137,30 @@ def chore_edit(request, chore_id):
 def chore_delete(request, chore_id):
     chore = get_object_or_404(Chore.objects.select_related("household"), pk=chore_id)
     household = _admin_household_or_404(request.user, chore.household_id)
+    recurring_pending = chore.series_id is not None and chore.status == Chore.TODO
     if request.method == "POST":
+        if recurring_pending:
+            action = request.POST.get("action")
+            if action not in {"delete_occurrence", "end_series"}:
+                return render(request, "core/chore_confirm_delete.html", {
+                    "chore": chore,
+                    "household": household,
+                    "recurring_pending": True,
+                    "error": "Choose whether to delete this occurrence or end the series.",
+                })
+            delete_recurring_occurrence(
+                chore_id=chore.pk,
+                user=request.user,
+                end_series=action == "end_series",
+            )
+            return redirect("household-detail", household_id=household.pk)
         chore.delete()
         return redirect("household-detail", household_id=household.pk)
-    return render(request, "core/chore_confirm_delete.html", {"chore": chore, "household": household})
+    return render(request, "core/chore_confirm_delete.html", {
+        "chore": chore,
+        "household": household,
+        "recurring_pending": recurring_pending,
+    })
 
 
 @login_required(login_url="sign-in")

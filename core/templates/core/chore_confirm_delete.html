@@ -7,7 +7,18 @@
       <p>Delete “{{ chore.title }}”?</p>
       <form method="post">
         {% csrf_token %}
-        <button type="submit">Delete chore</button>
+        {% if recurring_pending %}
+          {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+          <fieldset>
+            <legend>Recurring chore options</legend>
+            <button type="submit" name="action" value="delete_occurrence">Delete this occurrence only</button>
+            <p>The series stays active and its next scheduled occurrence will be created.</p>
+            <button type="submit" name="action" value="end_series">End the whole series</button>
+            <p>All unfinished occurrences will be removed. Completed history will remain.</p>
+          </fieldset>
+        {% else %}
+          <button type="submit">Delete chore</button>
+        {% endif %}
       </form>
       <p><a href="{% url 'household-detail' household.pk %}">Cancel</a></p>
     </main>
