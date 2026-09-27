@@ -12,7 +12,7 @@
 
 3. Start the development server:
 
-       uv run python manage.py runserver
+       uv run python manage.py runserver 127.0.0.1:8765
 
 4. Run the test suite:
 
