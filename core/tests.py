@@ -9,7 +9,7 @@ from datetime import timedelta
 from threading import Barrier, Thread
 from unittest.mock import patch
 
-from .models import Chore, Household, HouseholdMember, Invitation, SignInLink
+from .models import Chore, ChoreSeries, Household, HouseholdMember, Invitation, RecurrenceRule, SignInLink
 from .services import claim_chore
 
 
@@ -135,6 +135,83 @@ class HomePageTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Shared Household Chores")
+
+
+class ChoreRecurrenceTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user("schedule-admin@example.com")
+        self.member = User.objects.create_user("schedule-member@example.com")
+        self.household = Household.objects.create(name="Flat")
+        HouseholdMember.objects.create(household=self.household, user=self.admin, role=HouseholdMember.ADMIN)
+        HouseholdMember.objects.create(household=self.household, user=self.member)
+        self.client.force_login(self.admin)
+        self.create_url = reverse("chore-create", args=[self.household.pk])
+
+    def post_chore(self, extra=None):
+        data = {"title": "Clean kitchen", "due_date": "2026-10-05", "assignee": "", "recurrence": "one_off", "interval": "1", "weekdays": [], "day_of_month": ""}
+        data.update(extra or {})
+        return self.client.post(self.create_url, data)
+
+    def test_creates_daily_weekly_and_monthly_rules_and_only_first_occurrence(self):
+        patterns = [
+            ({"recurrence": "daily", "interval": "2"}, RecurrenceRule.DAILY, 2, "", None),
+            ({"recurrence": "weekly", "interval": "3", "weekdays": ["1", "4", "7"]}, RecurrenceRule.WEEKLY, 3, "1,4,7", None),
+            ({"recurrence": "monthly", "interval": "2", "day_of_month": "31"}, RecurrenceRule.MONTHLY, 2, "", 31),
+        ]
+        for number, (inputs, frequency, interval, weekdays, day_of_month) in enumerate(patterns):
+            with self.subTest(frequency=frequency):
+                self.post_chore({"title": f"Task {number}", **inputs})
+                occurrence = Chore.objects.get(title=f"Task {number}")
+                self.assertEqual(Chore.objects.filter(series=occurrence.series).count(), 1)
+                self.assertIsNotNone(occurrence.series)
+                self.assertEqual(occurrence.series.household, self.household)
+                rule = occurrence.series.rule
+                self.assertEqual((rule.frequency, rule.interval, rule.weekdays, rule.day_of_month), (frequency, interval, weekdays, day_of_month))
+
+    def test_one_off_chore_has_no_rule_or_series(self):
+        self.post_chore()
+        chore = Chore.objects.get()
+        self.assertIsNone(chore.series)
+        self.assertEqual(RecurrenceRule.objects.count(), 0)
+        self.assertEqual(ChoreSeries.objects.count(), 0)
+
+    def test_incomplete_and_invalid_patterns_are_rejected_on_their_fields(self):
+        invalid = [
+            ({"recurrence": "daily", "interval": "0"}, "interval"),
+            ({"recurrence": "weekly", "interval": "1", "weekdays": []}, "weekdays"),
+            ({"recurrence": "weekly", "interval": "1", "weekdays": ["8"]}, "weekdays"),
+            ({"recurrence": "monthly", "interval": "1", "day_of_month": ""}, "day_of_month"),
+            ({"recurrence": "monthly", "interval": "1", "day_of_month": "32"}, "day_of_month"),
+            ({"recurrence": "yearly", "interval": "1"}, "recurrence"),
+        ]
+        for data, field in invalid:
+            with self.subTest(data=data):
+                response = self.post_chore(data)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(field, response.context["form"].errors)
+                self.assertEqual(Chore.objects.count(), 0)
+                self.assertEqual(RecurrenceRule.objects.count(), 0)
+
+    def test_editing_series_updates_rule_without_rewriting_existing_occurrence_date(self):
+        self.post_chore({"recurrence": "weekly", "interval": "1", "weekdays": ["1"]})
+        occurrence = Chore.objects.get()
+        series = occurrence.series
+        original_due_date = occurrence.due_date
+        response = self.client.post(reverse("chore-edit", args=[occurrence.pk]), {
+            "title": "Clean kitchen", "due_date": str(original_due_date), "assignee": "",
+            "recurrence": "monthly", "interval": "2", "day_of_month": "15", "weekdays": [],
+        })
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        occurrence.refresh_from_db()
+        series.refresh_from_db()
+        self.assertEqual(occurrence.due_date, original_due_date)
+        self.assertEqual(occurrence.series_id, series.pk)
+        self.assertEqual((series.rule.frequency, series.rule.interval, series.rule.day_of_month), ("monthly", 2, 15))
+
+    def test_members_cannot_create_or_edit_recurrence(self):
+        self.client.force_login(self.member)
+        self.assertEqual(self.client.post(self.create_url, {"title": "No", "due_date": "2026-10-05", "recurrence": "daily", "interval": "1"}).status_code, 404)
+        self.assertEqual(Chore.objects.count(), 0)
 
 
 class UserModelTests(TestCase):

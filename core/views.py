@@ -99,7 +99,9 @@ def chore_create(request, household_id):
             chore = form.save(commit=False)
             chore.created_by = request.user
             chore.status = Chore.TODO
-            chore.save()
+            with transaction.atomic():
+                chore.save()
+                form.save_recurrence(chore)
             return redirect("household-detail", household_id=household.pk)
     else:
         form = ChoreForm(household=household)

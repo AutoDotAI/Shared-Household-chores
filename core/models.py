@@ -128,12 +128,55 @@ class Invitation(models.Model):
         return super().save(*args, **kwargs)
 
 
+class RecurrenceRule(models.Model):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    FREQUENCY_CHOICES = [(DAILY, "Daily"), (WEEKLY, "Weekly"), (MONTHLY, "Monthly")]
+
+    frequency = models.CharField(max_length=10, choices=FREQUENCY_CHOICES)
+    interval = models.PositiveIntegerField(default=1)
+    # Comma separated ISO weekdays: Monday=1 through Sunday=7.
+    weekdays = models.CharField(max_length=13, blank=True, default="")
+    day_of_month = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.interval < 1:
+            errors["interval"] = "The interval must be positive."
+        days = self.weekdays.split(",") if self.weekdays else []
+        if self.frequency == self.WEEKLY:
+            try:
+                parsed = [int(day) for day in days]
+            except ValueError:
+                parsed = []
+            if not parsed or any(day < 1 or day > 7 for day in parsed) or len(set(parsed)) != len(parsed):
+                errors["weekdays"] = "Select at least one weekday (Monday is 1 and Sunday is 7)."
+        elif days:
+            errors["weekdays"] = "Weekdays are only used for weekly schedules."
+        if self.frequency == self.MONTHLY:
+            if self.day_of_month is None or not 1 <= self.day_of_month <= 31:
+                errors["day_of_month"] = "Choose a day from 1 through 31."
+        elif self.day_of_month is not None:
+            errors["day_of_month"] = "A day of month is only used for monthly schedules."
+        if errors:
+            raise ValidationError(errors)
+
+
+class ChoreSeries(models.Model):
+    household = models.ForeignKey(Household, on_delete=models.CASCADE, related_name="chore_series")
+    rule = models.OneToOneField(RecurrenceRule, on_delete=models.CASCADE, related_name="series")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
 class Chore(models.Model):
     TODO = "todo"
     DONE = "done"
     STATUS_CHOICES = [(TODO, "To do"), (DONE, "Done")]
 
     household = models.ForeignKey(Household, on_delete=models.CASCADE, related_name="chores")
+    series = models.ForeignKey(ChoreSeries, null=True, blank=True, on_delete=models.SET_NULL, related_name="occurrences")
     title = models.CharField(max_length=200)
     assignee = models.ForeignKey(
         settings.AUTH_USER_MODEL,
