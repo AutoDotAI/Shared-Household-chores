@@ -2,18 +2,64 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core import mail
 from django.db import IntegrityError, OperationalError, close_old_connections, transaction
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from datetime import timedelta
 from threading import Barrier, Thread
 from unittest.mock import patch
+from importlib import reload
+import os
 
 from .models import Chore, ChoreSeries, Household, HouseholdMember, Invitation, RecurrenceRule, SignInLink
 from .services import claim_chore
 
 
 User = get_user_model()
+
+
+class EmailEnvironmentSettingsTests(SimpleTestCase):
+    def test_email_settings_default_to_console_without_smtp_host(self):
+        import config.settings as project_settings
+
+        try:
+            with patch.dict(os.environ, {}, clear=True):
+                reload(project_settings)
+                self.assertEqual(
+                    project_settings.EMAIL_BACKEND,
+                    "django.core.mail.backends.console.EmailBackend",
+                )
+                self.assertEqual(project_settings.EMAIL_PORT, 587)
+                self.assertFalse(project_settings.EMAIL_USE_TLS)
+        finally:
+            reload(project_settings)
+
+    def test_email_settings_configure_standard_smtp_from_environment(self):
+        import config.settings as project_settings
+
+        smtp_environment = {
+            "EMAIL_HOST": "smtp.example.com",
+            "EMAIL_PORT": "2525",
+            "EMAIL_HOST_USER": "smtp-user",
+            "EMAIL_HOST_PASSWORD": "smtp-password",
+            "EMAIL_USE_TLS": "yes",
+            "DEFAULT_FROM_EMAIL": "chores@example.com",
+        }
+        try:
+            with patch.dict(os.environ, smtp_environment, clear=True):
+                reload(project_settings)
+                self.assertEqual(
+                    project_settings.EMAIL_BACKEND,
+                    "django.core.mail.backends.smtp.EmailBackend",
+                )
+                self.assertEqual(project_settings.EMAIL_HOST, "smtp.example.com")
+                self.assertEqual(project_settings.EMAIL_PORT, 2525)
+                self.assertEqual(project_settings.EMAIL_HOST_USER, "smtp-user")
+                self.assertEqual(project_settings.EMAIL_HOST_PASSWORD, "smtp-password")
+                self.assertTrue(project_settings.EMAIL_USE_TLS)
+                self.assertEqual(project_settings.DEFAULT_FROM_EMAIL, "chores@example.com")
+        finally:
+            reload(project_settings)
 
 
 class HouseholdInvitationTests(TestCase):
