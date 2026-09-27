@@ -5,14 +5,14 @@ from django.db import IntegrityError, OperationalError, close_old_connections, t
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from threading import Barrier, Thread
 from unittest.mock import patch
 from importlib import reload
 import os
 
 from .models import Chore, ChoreSeries, Household, HouseholdMember, Invitation, RecurrenceRule, SignInLink
-from .services import claim_chore
+from .services import claim_chore, complete_chore
 
 
 User = get_user_model()
@@ -303,6 +303,91 @@ class ChoreRecurrenceTests(TestCase):
         self.client.force_login(self.member)
         self.assertEqual(self.client.post(self.create_url, {"title": "No", "due_date": "2026-10-05", "recurrence": "daily", "interval": "1"}).status_code, 404)
         self.assertEqual(Chore.objects.count(), 0)
+
+    def make_occurrence(self, due_date, frequency, interval=1, weekdays="", day_of_month=None, assignee=None):
+        rule = RecurrenceRule.objects.create(
+            frequency=frequency,
+            interval=interval,
+            weekdays=weekdays,
+            day_of_month=day_of_month,
+        )
+        series = ChoreSeries.objects.create(household=self.household, rule=rule)
+        return Chore.objects.create(
+            household=self.household,
+            series=series,
+            title="Recurring task",
+            assignee=assignee,
+            due_date=due_date,
+            created_by=self.admin,
+        )
+
+    def complete_and_get_next(self, occurrence):
+        self.assertTrue(complete_chore(chore_id=occurrence.pk, user=self.admin))
+        occurrence.refresh_from_db()
+        successor = occurrence.series.occurrences.exclude(pk=occurrence.pk).get()
+        self.assertEqual(occurrence.status, Chore.DONE)
+        self.assertEqual(successor.status, Chore.TODO)
+        self.assertEqual(successor.household_id, occurrence.household_id)
+        self.assertEqual(successor.title, occurrence.title)
+        self.assertEqual(successor.assignee_id, occurrence.assignee_id)
+        self.assertEqual(successor.created_by_id, occurrence.created_by_id)
+        return successor
+
+    def test_daily_interval_uses_due_date_even_when_completion_is_late(self):
+        occurrence = self.make_occurrence(date(2026, 1, 3), RecurrenceRule.DAILY, interval=4, assignee=self.member)
+        with patch("core.services.timezone.now", return_value=timezone.make_aware(datetime(2026, 1, 20))):
+            successor = self.complete_and_get_next(occurrence)
+        self.assertEqual(successor.due_date, date(2026, 1, 7))
+
+    def test_weekly_multiple_weekdays_and_interval_week_boundary(self):
+        occurrence = self.make_occurrence(date(2026, 1, 5), RecurrenceRule.WEEKLY, interval=2, weekdays="1,4")
+        # Monday is the first active week; Thursday is in that same week.
+        successor = self.complete_and_get_next(occurrence)
+        self.assertEqual(successor.due_date, date(2026, 1, 8))
+
+        occurrence = self.make_occurrence(date(2026, 1, 8), RecurrenceRule.WEEKLY, interval=2, weekdays="1,4")
+        successor = self.complete_and_get_next(occurrence)
+        # The next active interval week is anchored two weeks after Jan 5.
+        self.assertEqual(successor.due_date, date(2026, 1, 19))
+
+    def test_weekly_schedule_keeps_interval_anchor_after_late_completion(self):
+        occurrence = self.make_occurrence(date(2026, 1, 5), RecurrenceRule.WEEKLY, interval=2, weekdays="1,4")
+        with patch("core.services.timezone.now", return_value=timezone.make_aware(datetime(2026, 2, 1))):
+            successor = self.complete_and_get_next(occurrence)
+        self.assertEqual(successor.due_date, date(2026, 1, 8))
+
+    def test_monthly_interval_and_end_of_month_clamping_for_leap_and_common_years(self):
+        cases = [
+            (date(2024, 1, 31), 1, date(2024, 2, 29)),
+            (date(2023, 1, 31), 1, date(2023, 2, 28)),
+            (date(2024, 1, 31), 2, date(2024, 3, 31)),
+            (date(2024, 2, 29), 1, date(2024, 3, 31)),
+        ]
+        for due_date, interval, expected in cases:
+            with self.subTest(due_date=due_date, interval=interval):
+                occurrence = self.make_occurrence(
+                    due_date, RecurrenceRule.MONTHLY, interval=interval, day_of_month=31
+                )
+                successor = self.complete_and_get_next(occurrence)
+                self.assertEqual(successor.due_date, expected)
+
+    def test_monthly_schedule_uses_first_occurrence_month_anchor_and_ignores_late_completion(self):
+        occurrence = self.make_occurrence(date(2026, 1, 31), RecurrenceRule.MONTHLY, interval=2, day_of_month=15)
+        # Even though completion occurs in February, the next due date is in March.
+        with patch("core.services.timezone.now", return_value=timezone.make_aware(datetime(2026, 2, 20))):
+            successor = self.complete_and_get_next(occurrence)
+        self.assertEqual(successor.due_date, date(2026, 3, 15))
+
+    def test_existing_future_occurrence_and_repeated_completion_do_not_duplicate(self):
+        occurrence = self.make_occurrence(date(2026, 3, 1), RecurrenceRule.DAILY, interval=1)
+        existing = Chore.objects.create(
+            household=self.household, series=occurrence.series, title=occurrence.title,
+            assignee=occurrence.assignee, due_date=date(2026, 3, 2), created_by=self.admin,
+        )
+        self.assertTrue(complete_chore(chore_id=occurrence.pk, user=self.admin))
+        self.assertFalse(complete_chore(chore_id=occurrence.pk, user=self.admin))
+        self.assertEqual(occurrence.series.occurrences.filter(status=Chore.TODO).count(), 1)
+        self.assertEqual(occurrence.series.occurrences.get(status=Chore.TODO).pk, existing.pk)
 
 
 class UserModelTests(TestCase):
