@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ household.name }} settings</title>
+    {% load static %}<link rel="stylesheet" href="{% static 'core/pages.css' %}">
   </head>
   <body>
     <main>
@@ -22,11 +23,12 @@
       </section>
       <section>
         <h2>Members</h2>
-        <ul>
+        <ul class="settings-members">
           {% for membership in members %}
             <li>
-              {{ membership.user.email }} — {{ membership.get_role_display }}
-              <form method="post">
+              <strong class="member-email">{{ membership.user.email }}</strong>
+              <p class="member-role">{{ membership.get_role_display }}</p>
+              <div class="member-controls"><form method="post">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="change_role">
                 <input type="hidden" name="member_id" value="{{ membership.pk }}">
@@ -43,7 +45,7 @@
                 <input type="hidden" name="action" value="remove_member">
                 <input type="hidden" name="member_id" value="{{ membership.pk }}">
                 <button type="submit">Remove member</button>
-              </form>
+              </form></div>
             </li>
           {% endfor %}
         </ul>

@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{% if chore %}Edit{% else %}New{% endif %} chore</title></head>
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{% if chore %}Edit{% else %}New{% endif %} chore</title>{% load static %}<link rel="stylesheet" href="{% static 'core/pages.css' %}"></head>
   <body>
     <main>
       <h1>{% if chore %}Edit chore{% else %}New chore{% endif %}</h1>

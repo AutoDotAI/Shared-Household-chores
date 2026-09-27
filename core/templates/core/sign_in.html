@@ -1,12 +1,13 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Sign in</title></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in</title>{% load static %}<link rel="stylesheet" href="{% static 'core/pages.css' %}"></head>
 <body>
-  <h1>Sign in</h1>
-  <form method="post">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <button type="submit">Send sign-in link</button>
-  </form>
+  <main><h1>Sign in</h1>
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button type="submit">Send sign-in link</button>
+    </form>
+  </main>
 </body>
 </html>

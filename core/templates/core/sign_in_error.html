@@ -1,5 +1,5 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Sign-in link unavailable</title></head>
-<body><h1>Sign-in link unavailable</h1><p>This link is invalid, expired, or has already been used. Request a new sign-in link.</p></body>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign-in link unavailable</title>{% load static %}<link rel="stylesheet" href="{% static 'core/pages.css' %}"></head>
+<body><main><h1>Sign-in link unavailable</h1><p>This link is invalid, expired, or has already been used. Request a new sign-in link.</p><p><a href="{% url 'sign-in' %}">Request a new sign-in link</a></p></main></body>
 </html>
