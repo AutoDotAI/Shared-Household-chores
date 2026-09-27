@@ -600,6 +600,26 @@ class ChoreBoardTests(TestCase):
         self.assertNotContains(response, "Completed job")
         self.assertNotContains(response, "Private job")
 
+    def test_board_status_and_overdue_filters_show_matching_cards(self):
+        self.make_chore(title="Open current", due_date=timezone.localdate())
+        self.make_chore(title="Late current", due_date=timezone.localdate() - timedelta(days=1))
+        self.make_chore(title="Finished", status=Chore.DONE)
+        self.client.force_login(self.admin)
+
+        default = self.client.get(reverse("household-detail", args=[self.household.pk]))
+        self.assertContains(default, "Open current")
+        self.assertContains(default, "Late current")
+        self.assertNotContains(default, "Finished")
+        overdue = self.client.get(default.request["PATH_INFO"], {"overdue": "on"})
+        self.assertContains(overdue, "Late current")
+        self.assertNotContains(overdue, "Open current")
+        done = self.client.get(default.request["PATH_INFO"], {"status": Chore.DONE})
+        self.assertContains(done, "Finished")
+        self.assertNotContains(done, "Open current")
+        all_statuses = self.client.get(default.request["PATH_INFO"], {"status": "all"})
+        self.assertContains(all_statuses, "Finished")
+        self.assertContains(all_statuses, "Open current")
+
     def test_overdue_uses_local_date_and_due_today_is_not_overdue(self):
         today = timezone.localdate()
         yesterday = today - timedelta(days=1)

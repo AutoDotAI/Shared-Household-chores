@@ -9,12 +9,25 @@
   </head>
   <body>
     <main class="board-page">
-      <h1>{{ household.name }}</h1>
-      {% if is_admin %}<p><a href="{% url 'chore-create' household.pk %}">New chore</a> · <a href="{% url 'household-invite' household.pk %}">Invite member</a> · <a href="{% url 'household-settings' household.pk %}">Household settings</a></p>{% endif %}
+      <header class="board-header">
+        <h1>{{ household.name }}</h1>
+        {% if is_admin %}<nav aria-label="Household actions"><a class="action-link primary-action" href="{% url 'chore-create' household.pk %}">New chore</a><a class="action-link" href="{% url 'household-invite' household.pk %}">Invite member</a><a class="action-link" href="{% url 'household-settings' household.pk %}">Household settings</a></nav>{% endif %}
+      </header>
+      <form class="board-filters" method="get" aria-label="Filter chores">
+        <label for="status-filter">Status</label>
+        <select id="status-filter" name="status">
+          <option value="todo"{% if status_filter == 'todo' %} selected{% endif %}>To do</option>
+          <option value="done"{% if status_filter == 'done' %} selected{% endif %}>Done</option>
+          <option value="all"{% if status_filter == 'all' %} selected{% endif %}>All statuses</option>
+        </select>
+        <label class="overdue-filter"><input type="checkbox" name="overdue" value="on"{% if overdue_only %} checked{% endif %}> Overdue only</label>
+        <button type="submit">Apply filters</button>
+      </form>
       {% if not has_chores %}
         <p class="empty-state">There are no chores to do right now.</p>
       {% endif %}
-      <div class="board">
+      <div class="board-scroll" role="region" aria-label="Chore board" tabindex="0">
+       <div class="board">
         <section class="column" aria-labelledby="open-heading">
           <h2 id="open-heading">Open</h2>
           {% for chore in open_chores %}{% include 'core/chore_card.html' %}{% endfor %}
@@ -25,6 +38,7 @@
             {% for chore in member.chores %}{% include 'core/chore_card.html' %}{% endfor %}
           </section>
         {% endfor %}
+       </div>
       </div>
     </main>
   </body>

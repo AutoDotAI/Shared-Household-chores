@@ -2,19 +2,21 @@
   <h3>{{ chore.title }}</h3>
   {% if chore.assignee %}<p>Assignee: {{ chore.assignee.email }}</p>{% endif %}
   <p>Due: <time datetime="{{ chore.due_date|date:'Y-m-d' }}">{{ chore.due_date|date:'M j, Y' }}</time></p>
-  <p>Status: To do</p>
-  {% if chore.due_date < today %}<p class="overdue-label">Overdue</p>{% endif %}
-  {% if not chore.assignee %}
+  <p>Status: {% if chore.status == 'done' %}Done{% else %}To do{% endif %}</p>
+  {% if chore.status == 'todo' and chore.due_date < today %}<p class="overdue-label">Overdue</p>{% endif %}
+  {% if chore.status == 'todo' and not chore.assignee %}
     <form method="post" action="{% url 'chore-claim' chore.pk %}">
       {% csrf_token %}
       <button type="submit">Claim</button>
     </form>
   {% endif %}
-  {% if is_admin or chore.assignee_id == request.user.pk %}
-    <form method="post" action="{% url 'chore-complete' chore.pk %}">
-      {% csrf_token %}
-      <button type="submit">Done</button>
-    </form>
+  {% if chore.status == 'todo' %}
+    {% if is_admin or chore.assignee_id == request.user.pk %}
+      <form method="post" action="{% url 'chore-complete' chore.pk %}">
+        {% csrf_token %}
+        <button type="submit">Done</button>
+      </form>
+    {% endif %}
   {% endif %}
   {% if is_admin %}
     <p><a href="{% url 'chore-edit' chore.pk %}">Edit</a></p>

@@ -53,7 +53,16 @@ def household_detail(request, household_id):
         .select_related("user")
         .order_by("joined_at", "pk")
     )
-    chores = Chore.objects.filter(household=household, status=Chore.TODO).select_related("assignee")
+    status_filter = request.GET.get("status", Chore.TODO)
+    if status_filter not in {Chore.TODO, Chore.DONE, "all"}:
+        status_filter = Chore.TODO
+    chores = Chore.objects.filter(household=household).select_related("assignee")
+    if status_filter != "all":
+        chores = chores.filter(status=status_filter)
+    overdue_only = request.GET.get("overdue") == "on"
+    today = timezone.localdate()
+    if overdue_only:
+        chores = chores.filter(status=Chore.TODO, due_date__lt=today)
     open_chores = chores.filter(assignee__isnull=True).order_by("due_date", "pk")
     for membership in members:
         membership.chores = chores.filter(assignee=membership.user).order_by("due_date", "pk")
@@ -65,7 +74,9 @@ def household_detail(request, household_id):
             "members": members,
             "open_chores": open_chores,
             "has_chores": chores.exists(),
-            "today": timezone.localdate(),
+            "today": today,
+            "status_filter": status_filter,
+            "overdue_only": overdue_only,
             "is_admin": viewer_membership.role == HouseholdMember.ADMIN,
         },
     )
