@@ -1,0 +1,31 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ household.name }} chore history</title>
+    <link rel="stylesheet" href="{% static 'core/board.css' %}">
+  </head>
+  <body>
+    <main class="board-page">
+      <header class="board-header">
+        <h1>{{ household.name }} chore history</h1>
+        <nav aria-label="Household actions"><a class="action-link" href="{% url 'household-detail' household.pk %}">Back to board</a></nav>
+      </header>
+      {% if chores %}
+        <ul class="history-list">
+          {% for chore in chores %}
+            <li>
+              <h2>{{ chore.title }}</h2>
+              <p>Completed by {{ chore.completed_by.email }}</p>
+              <p>Completed <time datetime="{{ chore.completed_at|date:'c' }}">{{ chore.completed_at }}</time></p>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty-state">No chores have been completed in this household yet.</p>
+      {% endif %}
+    </main>
+  </body>
+</html>

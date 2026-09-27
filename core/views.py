@@ -82,6 +82,19 @@ def household_detail(request, household_id):
     )
 
 
+@login_required(login_url="sign-in")
+def household_history(request, household_id):
+    household = get_object_or_404(Household, pk=household_id)
+    if not HouseholdMember.objects.filter(household=household, user=request.user).exists():
+        raise Http404
+    chores = (
+        Chore.objects.filter(household=household, status=Chore.DONE)
+        .select_related("completed_by")
+        .order_by("-completed_at", "-pk")
+    )
+    return render(request, "core/household_history.html", {"household": household, "chores": chores})
+
+
 def _admin_household_or_404(user, household_id):
     membership = get_object_or_404(
         HouseholdMember.objects.select_related("household"),

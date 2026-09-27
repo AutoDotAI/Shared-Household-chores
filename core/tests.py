@@ -770,6 +770,74 @@ class ChoreBoardTests(TestCase):
         self.assertContains(all_statuses, "Finished")
         self.assertContains(all_statuses, "Open current")
 
+    def test_board_filters_boundaries_and_default_todo_only(self):
+        today = timezone.localdate()
+        self.make_chore(title="Due today", due_date=today)
+        self.make_chore(title="Past due", due_date=today - timedelta(days=1))
+        done = self.make_chore(title="Done past due", due_date=today - timedelta(days=1), status=Chore.DONE)
+        self.client.force_login(self.member)
+        url = reverse("household-detail", args=[self.household.pk])
+
+        default = self.client.get(url)
+        self.assertContains(default, "Due today")
+        self.assertContains(default, "Past due")
+        self.assertNotContains(default, "Done past due")
+        self.assertEqual(default.context["status_filter"], Chore.TODO)
+
+        todo = self.client.get(url, {"status": Chore.TODO})
+        self.assertContains(todo, "Due today")
+        self.assertContains(todo, "Past due")
+        self.assertNotContains(todo, "Done past due")
+        done_only = self.client.get(url, {"status": Chore.DONE})
+        self.assertContains(done_only, "Done past due")
+        self.assertNotContains(done_only, "Due today")
+        self.assertNotContains(done_only, "Past due")
+        overdue = self.client.get(url, {"overdue": "on"})
+        self.assertContains(overdue, "Past due")
+        self.assertNotContains(overdue, "Due today")
+        self.assertNotContains(overdue, "Done past due")
+
+    def test_household_history_shows_completion_fields_in_newest_first_order(self):
+        older = self.make_chore(title="Older completion", status=Chore.DONE)
+        older.completed_by = self.member
+        older.completed_at = timezone.now() - timedelta(days=2)
+        older.save(update_fields=["completed_by", "completed_at"])
+        newer = self.make_chore(title="Newer completion", status=Chore.DONE)
+        newer.completed_by = self.admin
+        newer.completed_at = timezone.now() - timedelta(hours=1)
+        newer.save(update_fields=["completed_by", "completed_at"])
+        self.make_chore(title="Still to do")
+        self.make_chore(household=self.other_household, title="Other household completion", status=Chore.DONE)
+        self.client.force_login(self.member)
+
+        response = self.client.get(reverse("household-history", args=[self.household.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Newer completion")
+        self.assertContains(response, "alice@example.com")
+        self.assertContains(response, "Older completion")
+        self.assertContains(response, "bob@example.com")
+        self.assertContains(
+            response,
+            f'<time datetime="{timezone.localtime(newer.completed_at).isoformat()}">',
+            html=False,
+        )
+        self.assertNotContains(response, "Still to do")
+        self.assertNotContains(response, "Other household completion")
+        self.assertEqual(list(response.context["chores"]), [newer, older])
+
+    def test_empty_household_history_has_clear_empty_state(self):
+        self.client.force_login(self.member)
+        response = self.client.get(reverse("household-history", args=[self.household.pk]))
+        self.assertContains(response, "No chores have been completed in this household yet.")
+
+    def test_non_member_cannot_read_board_or_history_with_query_parameters(self):
+        self.client.force_login(self.outsider)
+        board_url = reverse("household-detail", args=[self.household.pk])
+        history_url = reverse("household-history", args=[self.household.pk])
+        self.assertEqual(self.client.get(board_url, {"status": "all", "overdue": "on"}).status_code, 404)
+        self.assertEqual(self.client.get(history_url, {"status": "all", "overdue": "on"}).status_code, 404)
+
     def test_overdue_uses_local_date_and_due_today_is_not_overdue(self):
         today = timezone.localdate()
         yesterday = today - timedelta(days=1)

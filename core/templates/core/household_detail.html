@@ -11,7 +11,7 @@
     <main class="board-page">
       <header class="board-header">
         <h1>{{ household.name }}</h1>
-        {% if is_admin %}<nav aria-label="Household actions"><a class="action-link primary-action" href="{% url 'chore-create' household.pk %}">New chore</a><a class="action-link" href="{% url 'household-invite' household.pk %}">Invite member</a><a class="action-link" href="{% url 'household-settings' household.pk %}">Household settings</a></nav>{% endif %}
+        <nav aria-label="Household actions"><a class="action-link" href="{% url 'household-history' household.pk %}">Chore history</a>{% if is_admin %}<a class="action-link primary-action" href="{% url 'chore-create' household.pk %}">New chore</a><a class="action-link" href="{% url 'household-invite' household.pk %}">Invite member</a><a class="action-link" href="{% url 'household-settings' household.pk %}">Household settings</a>{% endif %}</nav>
       </header>
       <form class="board-filters" method="get" aria-label="Filter chores">
         <label for="status-filter">Status</label>
