@@ -130,6 +130,14 @@ class Chore(models.Model):
     )
     due_date = models.DateField()
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=TODO)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    completed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="completed_chores",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="created_chores"
     )

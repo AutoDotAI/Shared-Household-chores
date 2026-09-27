@@ -10,6 +10,7 @@ urlpatterns = [
     path("chores/<int:chore_id>/edit/", views.chore_edit, name="chore-edit"),
     path("chores/<int:chore_id>/delete/", views.chore_delete, name="chore-delete"),
     path("chores/<int:chore_id>/claim/", views.chore_claim, name="chore-claim"),
+    path("chores/<int:chore_id>/complete/", views.chore_complete, name="chore-complete"),
     path("sign-in/", views.request_sign_in, name="sign-in"),
     path("sign-in/<str:token>/", views.complete_sign_in, name="sign-in-complete"),
 ]

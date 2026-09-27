@@ -16,7 +16,7 @@ from django.utils import timezone
 
 from .forms import ChoreForm, HouseholdCreateForm, SignInRequestForm
 from .models import Chore, Household, HouseholdMember, SignInLink
-from .services import claim_chore
+from .services import claim_chore, complete_chore
 
 
 def home(request):
@@ -127,6 +127,16 @@ def chore_claim(request, chore_id):
     if not HouseholdMember.objects.filter(household_id=chore.household_id, user=request.user).exists():
         raise Http404
     claim_chore(chore_id=chore.pk, user=request.user)
+    return redirect("household-detail", household_id=chore.household_id)
+
+
+@login_required(login_url="sign-in")
+@require_POST
+def chore_complete(request, chore_id):
+    chore = get_object_or_404(Chore, pk=chore_id)
+    if not HouseholdMember.objects.filter(household_id=chore.household_id, user=request.user).exists():
+        raise Http404
+    complete_chore(chore_id=chore.pk, user=request.user)
     return redirect("household-detail", household_id=chore.household_id)
 
 

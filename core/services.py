@@ -1,4 +1,5 @@
 from django.db import OperationalError
+from django.utils import timezone
 
 from .models import Chore, HouseholdMember
 
@@ -27,3 +28,26 @@ def claim_chore(*, chore_id, user):
         if "locked" not in str(error).lower():
             raise
         return False
+
+
+def complete_chore(*, chore_id, user):
+    """Complete a to-do chore when the user is its assignee or a household admin."""
+    chore = Chore.objects.filter(pk=chore_id).values("household_id", "assignee_id").first()
+    if chore is None:
+        return False
+
+    membership = HouseholdMember.objects.filter(
+        household_id=chore["household_id"], user=user
+    ).values_list("role", flat=True).first()
+    if membership is None:
+        return False
+    if membership != HouseholdMember.ADMIN and chore["assignee_id"] != user.pk:
+        return False
+
+    # The conditional update prevents repeated requests from replacing the
+    # original completion user or timestamp, including concurrent requests.
+    return Chore.objects.filter(pk=chore_id, status=Chore.TODO).update(
+        status=Chore.DONE,
+        completed_at=timezone.now(),
+        completed_by=user,
+    ) == 1

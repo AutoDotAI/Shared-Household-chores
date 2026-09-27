@@ -10,6 +10,12 @@
       <button type="submit">Claim</button>
     </form>
   {% endif %}
+  {% if is_admin or chore.assignee_id == request.user.pk %}
+    <form method="post" action="{% url 'chore-complete' chore.pk %}">
+      {% csrf_token %}
+      <button type="submit">Done</button>
+    </form>
+  {% endif %}
   {% if is_admin %}
     <p><a href="{% url 'chore-edit' chore.pk %}">Edit</a></p>
     <form method="post" action="{% url 'chore-delete' chore.pk %}">

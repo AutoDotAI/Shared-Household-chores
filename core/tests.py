@@ -226,6 +226,65 @@ class ChoreBoardTests(TestCase):
         foreign.refresh_from_db()
         self.assertEqual(foreign.assignee, self.outsider)
 
+    def test_member_and_admin_can_complete_allowed_chores_and_store_completion_details(self):
+        assigned = self.make_chore(title="Assigned", assignee=self.member)
+        open_chore = self.make_chore(title="Open")
+        instant = timezone.now()
+        self.client.force_login(self.member)
+        board = self.client.get(reverse("household-detail", args=[self.household.pk]))
+        self.assertContains(board, f'action="{reverse("chore-complete", args=[assigned.pk])}"')
+        self.assertNotContains(board, f'action="{reverse("chore-complete", args=[open_chore.pk])}"')
+        response = self.client.post(reverse("chore-complete", args=[assigned.pk]))
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        assigned.refresh_from_db()
+        self.assertEqual(assigned.status, Chore.DONE)
+        self.assertEqual(assigned.completed_by, self.member)
+        self.assertGreaterEqual(assigned.completed_at, instant)
+
+        self.client.force_login(self.admin)
+        board = self.client.get(reverse("household-detail", args=[self.household.pk]))
+        self.assertContains(board, f'action="{reverse("chore-complete", args=[open_chore.pk])}"')
+        self.client.post(reverse("chore-complete", args=[open_chore.pk]))
+        open_chore.refresh_from_db()
+        self.assertEqual(open_chore.status, Chore.DONE)
+        self.assertEqual(open_chore.completed_by, self.admin)
+        self.assertIsNotNone(open_chore.completed_at)
+
+    def test_member_cannot_complete_another_members_chore_and_outsider_cannot_access_household_chore(self):
+        chore = self.make_chore(title="Bob's job", assignee=self.admin)
+        self.client.force_login(self.member)
+        board = self.client.get(reverse("household-detail", args=[self.household.pk]))
+        self.assertNotContains(board, f'action="{reverse("chore-complete", args=[chore.pk])}"')
+        self.client.post(reverse("chore-complete", args=[chore.pk]))
+        chore.refresh_from_db()
+        self.assertEqual((chore.status, chore.completed_at, chore.completed_by_id), (Chore.TODO, None, None))
+
+        self.client.force_login(self.outsider)
+        response = self.client.post(reverse("chore-complete", args=[chore.pk]))
+        self.assertEqual(response.status_code, 404)
+        chore.refresh_from_db()
+        self.assertEqual((chore.status, chore.completed_at, chore.completed_by_id), (Chore.TODO, None, None))
+
+    def test_repeated_completion_does_not_overwrite_completion_details(self):
+        chore = self.make_chore(assignee=self.member)
+        self.client.force_login(self.member)
+        self.client.post(reverse("chore-complete", args=[chore.pk]))
+        chore.refresh_from_db()
+        original = (chore.status, chore.completed_at, chore.completed_by_id)
+
+        self.client.force_login(self.admin)
+        self.client.post(reverse("chore-complete", args=[chore.pk]))
+        chore.refresh_from_db()
+        self.assertEqual((chore.status, chore.completed_at, chore.completed_by_id), original)
+
+    def test_member_cannot_complete_chore_in_another_household(self):
+        foreign = self.make_chore(household=self.other_household, title="Foreign", assignee=self.outsider)
+        self.client.force_login(self.member)
+        response = self.client.post(reverse("chore-complete", args=[foreign.pk]))
+        self.assertEqual(response.status_code, 404)
+        foreign.refresh_from_db()
+        self.assertEqual((foreign.status, foreign.completed_at, foreign.completed_by_id), (Chore.TODO, None, None))
+
     def test_outsider_cannot_claim_household_chore(self):
         chore = self.make_chore()
         self.client.force_login(self.outsider)
