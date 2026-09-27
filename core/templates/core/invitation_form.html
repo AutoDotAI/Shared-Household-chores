@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Invite someone to {{ household.name }}</title></head>
+  <body>
+    <main>
+      <h1>Invite someone to {{ household.name }}</h1>
+      <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Send invitation</button>
+      </form>
+      <p><a href="{% url 'household-detail' household.pk %}">Back to household</a></p>
+    </main>
+  </body>
+</html>

@@ -9,11 +9,124 @@ from datetime import timedelta
 from threading import Barrier, Thread
 from unittest.mock import patch
 
-from .models import Chore, Household, HouseholdMember, SignInLink
+from .models import Chore, Household, HouseholdMember, Invitation, SignInLink
 from .services import claim_chore
 
 
 User = get_user_model()
+
+
+class HouseholdInvitationTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user("admin@example.com")
+        self.member = User.objects.create_user("member@example.com")
+        self.outsider = User.objects.create_user("outsider@example.com")
+        self.household = Household.objects.create(name="Flat 12")
+        HouseholdMember.objects.create(
+            household=self.household, user=self.admin, role=HouseholdMember.ADMIN
+        )
+        HouseholdMember.objects.create(household=self.household, user=self.member)
+        self.url = reverse("household-invite", args=[self.household.pk])
+
+    def invite(self, email="new-person@example.com"):
+        self.client.force_login(self.admin)
+        response = self.client.post(self.url, {"email": email})
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        invitation = Invitation.objects.get(email=email.strip().lower())
+        link = mail.outbox[-1].body.split("link: ", 1)[1].splitlines()[0]
+        self.client.logout()
+        return invitation, link
+
+    def test_only_household_admin_can_invite(self):
+        self.client.force_login(self.member)
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+        self.assertEqual(self.client.post(self.url, {"email": "x@example.com"}).status_code, 404)
+        self.client.force_login(self.outsider)
+        self.assertEqual(self.client.get(self.url).status_code, 404)
+        self.assertEqual(self.client.post(self.url, {"email": "x@example.com"}).status_code, 404)
+        self.client.logout()
+        response = self.client.get(self.url)
+        self.assertRedirects(response, f"{reverse('sign-in')}?next={self.url}")
+        self.assertEqual(Invitation.objects.count(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_invite_email_is_validated_before_saving_or_sending(self):
+        self.client.force_login(self.admin)
+        for email in ("", "   ", "not-an-email"):
+            with self.subTest(email=email):
+                response = self.client.post(self.url, {"email": email})
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.context["form"].errors["email"])
+                self.assertEqual(Invitation.objects.count(), 0)
+                self.assertEqual(len(mail.outbox), 0)
+
+    def test_invitation_email_has_seven_day_signed_link(self):
+        before = timezone.now()
+        invitation, link = self.invite("  Friend@Example.com ")
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.email, "friend@example.com")
+        self.assertGreaterEqual(invitation.expires_at, before + timedelta(days=7))
+        self.assertIn("seven days", mail.outbox[-1].body)
+        self.assertTrue(link.startswith("http://testserver/invitations/"))
+
+    def test_acceptance_creates_user_and_member_membership(self):
+        invitation, link = self.invite()
+        response = self.client.get(link)
+        user = User.objects.get(email="new-person@example.com")
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        self.assertEqual(self.client.session["_auth_user_id"], str(user.pk))
+        self.assertEqual(
+            list(HouseholdMember.objects.filter(household=self.household, user=user).values_list("role", flat=True)),
+            [HouseholdMember.MEMBER],
+        )
+        invitation.refresh_from_db()
+        self.assertIsNotNone(invitation.accepted_at)
+
+    def test_existing_user_is_authenticated_and_joined(self):
+        existing = User.objects.create_user("known@example.com")
+        _, link = self.invite(existing.email)
+        response = self.client.get(link)
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        self.assertEqual(HouseholdMember.objects.get(household=self.household, user=existing).role, HouseholdMember.MEMBER)
+        self.assertEqual(self.client.session["_auth_user_id"], str(existing.pk))
+
+    def test_signed_in_user_with_different_email_cannot_accept(self):
+        invitation, link = self.invite()
+        self.client.force_login(self.outsider)
+        response = self.client.get(link)
+        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, "different email address", status_code=400)
+        self.assertFalse(HouseholdMember.objects.filter(household=self.household, user=self.outsider).exists())
+        invitation.refresh_from_db()
+        self.assertIsNone(invitation.accepted_at)
+
+    def test_expired_altered_and_reused_links_are_rejected(self):
+        invitation, link = self.invite()
+        invitation.expires_at = timezone.now() - timedelta(seconds=1)
+        invitation.save(update_fields=["expires_at"])
+        response = self.client.get(link)
+        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, "invalid, expired, or has already been used", status_code=400)
+        self.assertFalse(HouseholdMember.objects.filter(household=self.household, user__email=invitation.email).exists())
+
+        invitation.expires_at = timezone.now() + timedelta(days=7)
+        invitation.save(update_fields=["expires_at"])
+        token_start = link.index("/invitations/") + len("/invitations/")
+        altered_index = token_start + 3
+        altered_link = link[:altered_index] + ("a" if link[altered_index] != "a" else "b") + link[altered_index + 1:]
+        self.assertEqual(self.client.get(altered_link).status_code, 400)
+        self.assertFalse(HouseholdMember.objects.filter(household=self.household, user__email=invitation.email).exists())
+
+        self.assertEqual(self.client.get(link).status_code, 302)
+        self.client.logout()
+        response = self.client.get(link)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(HouseholdMember.objects.filter(household=self.household, user__email=invitation.email).count(), 1)
+
+    def test_accepting_for_existing_member_does_not_duplicate_membership(self):
+        _, link = self.invite(self.member.email)
+        self.assertEqual(self.client.get(link).status_code, 302)
+        self.assertEqual(HouseholdMember.objects.filter(household=self.household, user=self.member).count(), 1)
 
 
 class HomePageTests(TestCase):

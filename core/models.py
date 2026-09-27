@@ -114,6 +114,20 @@ class HouseholdMember(models.Model):
         return f"{self.user} in {self.household} ({self.role})"
 
 
+class Invitation(models.Model):
+    household = models.ForeignKey(Household, on_delete=models.CASCADE, related_name="invitations")
+    email = models.EmailField()
+    token_digest = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if self.email is not None:
+            self.email = self.email.strip().lower()
+        return super().save(*args, **kwargs)
+
+
 class Chore(models.Model):
     TODO = "todo"
     DONE = "done"

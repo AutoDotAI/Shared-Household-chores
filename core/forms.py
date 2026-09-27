@@ -7,6 +7,13 @@ class SignInRequestForm(forms.Form):
     email = forms.EmailField()
 
 
+class InvitationForm(forms.Form):
+    email = forms.EmailField()
+
+    def clean_email(self):
+        return self.cleaned_data["email"].strip().lower()
+
+
 class HouseholdCreateForm(forms.ModelForm):
     class Meta:
         model = Household
