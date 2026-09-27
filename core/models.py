@@ -1,5 +1,6 @@
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
@@ -78,3 +79,36 @@ class SignInLink(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     used_at = models.DateTimeField(null=True, blank=True)
+
+
+class Household(models.Model):
+    name = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self):
+        super().clean()
+        self.name = self.name.strip()
+        if not self.name:
+            raise ValidationError({"name": "A household name is required."})
+
+    def __str__(self):
+        return self.name
+
+
+class HouseholdMember(models.Model):
+    ADMIN = "admin"
+    MEMBER = "member"
+    ROLE_CHOICES = [(ADMIN, "Admin"), (MEMBER, "Member")]
+
+    household = models.ForeignKey(Household, on_delete=models.CASCADE, related_name="memberships")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="household_memberships")
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=MEMBER)
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["household", "user"], name="unique_household_user_membership"),
+        ]
+
+    def __str__(self):
+        return f"{self.user} in {self.household} ({self.role})"

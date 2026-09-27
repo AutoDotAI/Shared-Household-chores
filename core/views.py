@@ -4,20 +4,47 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model, login
+from django.contrib.auth.decorators import login_required
 from django.core import signing
 from django.core.mail import send_mail
 from django.db import transaction
-from django.http import HttpResponse
-from django.shortcuts import redirect, render
+from django.http import Http404, HttpResponse
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
-from .forms import SignInRequestForm
-from .models import SignInLink
+from .forms import HouseholdCreateForm, SignInRequestForm
+from .models import Household, HouseholdMember, SignInLink
 
 
 def home(request):
     return HttpResponse("<h1>Shared Household Chores</h1>")
+
+
+@login_required(login_url="sign-in")
+def create_household(request):
+    if request.method == "POST":
+        form = HouseholdCreateForm(request.POST)
+        if form.is_valid():
+            with transaction.atomic():
+                household = form.save()
+                HouseholdMember.objects.create(
+                    household=household,
+                    user=request.user,
+                    role=HouseholdMember.ADMIN,
+                )
+            return redirect("household-detail", household_id=household.pk)
+    else:
+        form = HouseholdCreateForm()
+    return render(request, "core/household_form.html", {"form": form})
+
+
+@login_required(login_url="sign-in")
+def household_detail(request, household_id):
+    household = get_object_or_404(Household, pk=household_id)
+    if not HouseholdMember.objects.filter(household=household, user=request.user).exists():
+        raise Http404
+    return render(request, "core/household_detail.html", {"household": household})
 
 
 SIGN_IN_LINK_MAX_AGE = 15 * 60

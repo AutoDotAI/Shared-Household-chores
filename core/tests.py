@@ -8,7 +8,7 @@ from django.utils import timezone
 from datetime import timedelta
 from unittest.mock import patch
 
-from .models import SignInLink
+from .models import Household, HouseholdMember, SignInLink
 
 
 User = get_user_model()
@@ -50,6 +50,61 @@ class UserModelTests(TestCase):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 User.objects.create_user("PERSON@example.com")
+
+
+class HouseholdTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("alice@example.com")
+
+    def test_creation_redirects_and_displays_saved_name_and_creator_admin(self):
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("household-create"), {"name": "  Flat 12  "})
+
+        household = Household.objects.get()
+        self.assertRedirects(response, reverse("household-detail", args=[household.pk]))
+        self.assertContains(self.client.get(response.url), "Flat 12")
+        membership = HouseholdMember.objects.get(household=household, user=self.user)
+        self.assertEqual(membership.role, HouseholdMember.ADMIN)
+        self.assertEqual(household.name, "Flat 12")
+
+    def test_blank_or_whitespace_name_does_not_create_household(self):
+        self.client.force_login(self.user)
+        for name in ("", "   ", "\t\n"):
+            with self.subTest(name=name):
+                response = self.client.post(reverse("household-create"), {"name": name})
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "A household name is required.")
+                self.assertEqual(Household.objects.count(), 0)
+                self.assertEqual(HouseholdMember.objects.count(), 0)
+
+    def test_database_prevents_duplicate_membership(self):
+        household = Household.objects.create(name="Flat 12")
+        HouseholdMember.objects.create(household=household, user=self.user)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                HouseholdMember.objects.create(household=household, user=self.user)
+
+    def test_full_clean_rejects_invalid_role(self):
+        household = Household.objects.create(name="Flat 12")
+        membership = HouseholdMember(household=household, user=self.user, role="owner")
+        with self.assertRaises(ValidationError):
+            membership.full_clean()
+
+    def test_household_page_access_for_member_anonymous_and_non_member(self):
+        household = Household.objects.create(name="Flat 12")
+        HouseholdMember.objects.create(household=household, user=self.user)
+        url = reverse("household-detail", args=[household.pk])
+
+        self.client.force_login(self.user)
+        self.assertContains(self.client.get(url), "Flat 12")
+
+        self.client.logout()
+        response = self.client.get(url)
+        self.assertRedirects(response, f"{reverse('sign-in')}?next={url}")
+
+        outsider = User.objects.create_user("bob@example.com")
+        self.client.force_login(outsider)
+        self.assertEqual(self.client.get(url).status_code, 404)
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")

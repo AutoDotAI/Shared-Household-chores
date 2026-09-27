@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Create household</title></head>
+  <body>
+    <h1>Create a household</h1>
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button type="submit">Create household</button>
+    </form>
+  </body>
+</html>
