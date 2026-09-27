@@ -7,7 +7,8 @@ from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required
 from django.core import signing
 from django.core.mail import send_mail
-from django.db import transaction
+from django.db import OperationalError, connection, transaction
+from django.db.models import F
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -78,6 +79,15 @@ def _admin_household_or_404(user, household_id):
         role=HouseholdMember.ADMIN,
     )
     return membership.household
+
+
+def _lock_household_for_management(household_id):
+    if connection.features.has_select_for_update:
+        return Household.objects.select_for_update().get(pk=household_id)
+    # SQLite has no SELECT FOR UPDATE. A no-op UPDATE obtains its reserved
+    # write lock before we inspect memberships, serializing competing managers.
+    Household.objects.filter(pk=household_id).update(name=F("name"))
+    return get_object_or_404(Household, pk=household_id)
 
 
 @login_required(login_url="sign-in")
@@ -182,29 +192,33 @@ def invite_member(request, household_id):
 @login_required(login_url="sign-in")
 @require_http_methods(["GET", "POST"])
 def household_settings(request, household_id):
-    household = _admin_household_or_404(request.user, household_id)
+    household = None
     error = None
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "rename":
-            form = HouseholdSettingsForm(request.POST, instance=household)
-            if form.is_valid():
+            form = HouseholdSettingsForm(request.POST)
+            try:
                 with transaction.atomic():
-                    locked_household = Household.objects.select_for_update().get(pk=household.pk)
+                    locked_household = _lock_household_for_management(household_id)
                     if not HouseholdMember.objects.filter(
                         household=locked_household, user=request.user, role=HouseholdMember.ADMIN
                     ).exists():
                         raise Http404
-                    locked_household.name = form.cleaned_data["name"]
-                    locked_household.save(update_fields=["name"])
-                return redirect("household-settings", household_id=household.pk)
+                    if form.is_valid():
+                        locked_household.name = form.cleaned_data["name"]
+                        locked_household.save(update_fields=["name"])
+            except OperationalError:
+                return HttpResponse("Another household change is in progress. Please retry.", status=409)
+            if form.is_valid():
+                return redirect("household-settings", household_id=household_id)
         else:
-            form = HouseholdSettingsForm(instance=household)
+            form = HouseholdSettingsForm()
             try:
                 with transaction.atomic():
                     # Serializing changes on the household row prevents two admins
                     # from independently removing/demoting the last admin.
-                    locked_household = Household.objects.select_for_update().get(pk=household.pk)
+                    locked_household = _lock_household_for_management(household_id)
                     actor = HouseholdMember.objects.filter(
                         household=locked_household, user=request.user, role=HouseholdMember.ADMIN
                     ).first()
@@ -240,10 +254,15 @@ def household_settings(request, household_id):
                         error = "Choose a valid action."
             except (HouseholdMember.DoesNotExist, ValueError, TypeError):
                 error = "That household member could not be found."
+            except OperationalError:
+                return HttpResponse("Another household change is in progress. Please retry.", status=409)
             if error is None:
-                return redirect("household-settings", household_id=household.pk)
+                return redirect("household-settings", household_id=household_id)
     else:
+        household = _admin_household_or_404(request.user, household_id)
         form = HouseholdSettingsForm(instance=household)
+    if household is None:
+        household = get_object_or_404(Household, pk=household_id)
     members = HouseholdMember.objects.filter(household=household).select_related("user").order_by("joined_at", "pk")
     return render(request, "core/household_settings.html", {
         "household": household,

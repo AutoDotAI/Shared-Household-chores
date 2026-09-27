@@ -347,6 +347,7 @@ class HouseholdSettingsTests(TestCase):
                 self.client.force_login(user)
                 self.assertEqual(self.client.get(self.url).status_code, 404)
                 self.assertEqual(self.client.post(self.url, {"action": "rename", "name": "Hacked"}).status_code, 404)
+                self.assertEqual(self.client.post(self.url, {"action": "rename", "name": "   "}).status_code, 404)
                 self.assertEqual(self.client.post(self.url, {
                     "action": "change_role", "member_id": self.member_membership.pk, "role": "admin",
                 }).status_code, 404)
@@ -716,6 +717,67 @@ class ConcurrentClaimTests(TransactionTestCase):
         self.assertEqual(sorted(outcomes), [False, True])
         chore.refresh_from_db()
         self.assertIn(chore.assignee_id, (first.pk, second.pk))
+
+
+class ConcurrentHouseholdSettingsTests(TransactionTestCase):
+    reset_sequences = True
+
+    def test_competing_last_admin_demotions_never_remove_all_admins(self):
+        from django.test import Client
+
+        first = User.objects.create_user("first-admin@example.com")
+        second = User.objects.create_user("second-admin@example.com")
+        household = Household.objects.create(name="Flat")
+        first_membership = HouseholdMember.objects.create(
+            household=household, user=first, role=HouseholdMember.ADMIN
+        )
+        second_membership = HouseholdMember.objects.create(
+            household=household, user=second, role=HouseholdMember.ADMIN
+        )
+        url = reverse("household-settings", args=[household.pk])
+
+        for _ in range(3):
+            barrier = Barrier(2)
+            statuses = []
+            errors = []
+            first_client = Client()
+            first_client.force_login(first)
+            second_client = Client()
+            second_client.force_login(second)
+
+            def demote(client, target_id):
+                close_old_connections()
+                try:
+                    barrier.wait(timeout=5)
+                    response = client.post(url, {
+                        "action": "change_role",
+                        "member_id": target_id,
+                        "role": HouseholdMember.MEMBER,
+                    })
+                    statuses.append(response.status_code)
+                except Exception as error:
+                    errors.append(error)
+                finally:
+                    close_old_connections()
+
+            threads = [
+                Thread(target=demote, args=(first_client, second_membership.pk)),
+                Thread(target=demote, args=(second_client, first_membership.pk)),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=15)
+
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(errors, [])
+            self.assertEqual(statuses.count(302), 1)
+            self.assertTrue(set(statuses).issubset({302, 404, 409}))
+            self.assertGreaterEqual(
+                HouseholdMember.objects.filter(household=household, role=HouseholdMember.ADMIN).count(),
+                1,
+            )
+            HouseholdMember.objects.filter(household=household).update(role=HouseholdMember.ADMIN)
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
