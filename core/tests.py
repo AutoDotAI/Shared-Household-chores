@@ -179,6 +179,52 @@ class ChoreBoardTests(TestCase):
         self.assertContains(response, "Due now")
         self.assertNotContains(response, 'class="chore-card overdue"><h3>Due now')
 
+    def test_open_chores_show_claim_action_and_member_claim_moves_chore_to_member_column(self):
+        chore = self.make_chore(title="Claim me")
+        self.client.force_login(self.member)
+        board_url = reverse("household-detail", args=[self.household.pk])
+        response = self.client.get(board_url)
+        self.assertContains(response, f'action="{reverse("chore-claim", args=[chore.pk])}"')
+        self.assertContains(response, ">Claim</button>")
+
+        response = self.client.post(reverse("chore-claim", args=[chore.pk]))
+        self.assertRedirects(response, board_url)
+        chore.refresh_from_db()
+        self.assertEqual(chore.assignee, self.member)
+        board = self.client.get(board_url)
+        self.assertContains(board, "Assignee: bob@example.com")
+        self.assertNotContains(board, f'action="{reverse("chore-claim", args=[chore.pk])}"')
+
+    def test_claim_is_first_wins_and_never_transfers_an_assignment(self):
+        chore = self.make_chore()
+        self.client.force_login(self.member)
+        self.client.post(reverse("chore-claim", args=[chore.pk]))
+        self.client.force_login(self.admin)
+        self.client.post(reverse("chore-claim", args=[chore.pk]))
+        chore.refresh_from_db()
+        self.assertEqual(chore.assignee, self.member)
+
+    def test_claim_rejects_done_and_cross_household_chores_without_changes(self):
+        done = self.make_chore(title="Done", status=Chore.DONE)
+        foreign = self.make_chore(household=self.other_household, title="Foreign", assignee=self.outsider)
+        self.client.force_login(self.member)
+        self.client.post(reverse("chore-claim", args=[done.pk]))
+        done.refresh_from_db()
+        self.assertIsNone(done.assignee)
+        self.assertEqual(done.status, Chore.DONE)
+        response = self.client.post(reverse("chore-claim", args=[foreign.pk]))
+        self.assertEqual(response.status_code, 404)
+        foreign.refresh_from_db()
+        self.assertEqual(foreign.assignee, self.outsider)
+
+    def test_outsider_cannot_claim_household_chore(self):
+        chore = self.make_chore()
+        self.client.force_login(self.outsider)
+        response = self.client.post(reverse("chore-claim", args=[chore.pk]))
+        self.assertEqual(response.status_code, 404)
+        chore.refresh_from_db()
+        self.assertIsNone(chore.assignee)
+
     def test_empty_state_when_household_has_no_todo_chores(self):
         self.make_chore(title="Already done", status=Chore.DONE)
         self.client.force_login(self.admin)

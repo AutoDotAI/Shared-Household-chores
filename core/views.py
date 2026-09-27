@@ -11,10 +11,12 @@ from django.db import transaction
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.views.decorators.http import require_POST
 from django.utils import timezone
 
 from .forms import ChoreForm, HouseholdCreateForm, SignInRequestForm
 from .models import Chore, Household, HouseholdMember, SignInLink
+from .services import claim_chore
 
 
 def home(request):
@@ -116,6 +118,16 @@ def chore_delete(request, chore_id):
         chore.delete()
         return redirect("household-detail", household_id=household.pk)
     return render(request, "core/chore_confirm_delete.html", {"chore": chore, "household": household})
+
+
+@login_required(login_url="sign-in")
+@require_POST
+def chore_claim(request, chore_id):
+    chore = get_object_or_404(Chore, pk=chore_id)
+    if not HouseholdMember.objects.filter(household_id=chore.household_id, user=request.user).exists():
+        raise Http404
+    claim_chore(chore_id=chore.pk, user=request.user)
+    return redirect("household-detail", household_id=chore.household_id)
 
 
 SIGN_IN_LINK_MAX_AGE = 15 * 60
