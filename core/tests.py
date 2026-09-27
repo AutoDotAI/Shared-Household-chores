@@ -1,14 +1,16 @@
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core import mail
-from django.db import IntegrityError, transaction
-from django.test import TestCase, override_settings
+from django.db import IntegrityError, OperationalError, close_old_connections, transaction
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from datetime import timedelta
+from threading import Barrier, Thread
 from unittest.mock import patch
 
 from .models import Chore, Household, HouseholdMember, SignInLink
+from .services import claim_chore
 
 
 User = get_user_model()
@@ -204,6 +206,13 @@ class ChoreBoardTests(TestCase):
         chore.refresh_from_db()
         self.assertEqual(chore.assignee, self.member)
 
+    def test_claim_lock_contention_returns_false_and_preserves_assignment(self):
+        chore = self.make_chore()
+        with patch("django.db.models.query.QuerySet.update", side_effect=OperationalError("database is locked")):
+            self.assertFalse(claim_chore(chore_id=chore.pk, user=self.member))
+        chore.refresh_from_db()
+        self.assertIsNone(chore.assignee)
+
     def test_claim_rejects_done_and_cross_household_chores_without_changes(self):
         done = self.make_chore(title="Done", status=Chore.DONE)
         foreign = self.make_chore(household=self.other_household, title="Foreign", assignee=self.outsider)
@@ -339,6 +348,50 @@ class ChoreBoardTests(TestCase):
             self.assertEqual((chore.title, chore.assignee_id), ("Protected", self.member.pk))
             self.assertFalse(Chore.objects.filter(title="Tampered").exists())
             self.assertEqual(Chore.objects.count(), 1)
+
+
+class ConcurrentClaimTests(TransactionTestCase):
+    reset_sequences = True
+
+    def test_simultaneous_claimants_produce_one_winner_without_database_lock_error(self):
+        admin = User.objects.create_user("admin@example.com")
+        first = User.objects.create_user("first@example.com")
+        second = User.objects.create_user("second@example.com")
+        household = Household.objects.create(name="Flat")
+        for user in (admin, first, second):
+            HouseholdMember.objects.create(household=household, user=user)
+        chore = Chore.objects.create(
+            household=household,
+            title="Claim race",
+            due_date=timezone.localdate(),
+            created_by=admin,
+        )
+        barrier = Barrier(2)
+        outcomes = []
+        errors = []
+
+        def claim(user_id):
+            close_old_connections()
+            try:
+                user = User.objects.get(pk=user_id)
+                barrier.wait()
+                outcomes.append(claim_chore(chore_id=chore.pk, user=user))
+            except Exception as error:
+                errors.append(error)
+            finally:
+                close_old_connections()
+
+        threads = [Thread(target=claim, args=(user.pk,)) for user in (first, second)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(outcomes), [False, True])
+        chore.refresh_from_db()
+        self.assertIn(chore.assignee_id, (first.pk, second.pk))
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
