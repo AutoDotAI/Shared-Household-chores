@@ -8,7 +8,7 @@ from django.utils import timezone
 from datetime import timedelta
 from unittest.mock import patch
 
-from .models import Household, HouseholdMember, SignInLink
+from .models import Chore, Household, HouseholdMember, SignInLink
 
 
 User = get_user_model()
@@ -105,6 +105,100 @@ class HouseholdTests(TestCase):
         outsider = User.objects.create_user("bob@example.com")
         self.client.force_login(outsider)
         self.assertEqual(self.client.get(url).status_code, 404)
+
+
+class ChoreBoardTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user("alice@example.com")
+        self.member = User.objects.create_user("bob@example.com")
+        self.outsider = User.objects.create_user("eve@example.com")
+        self.household = Household.objects.create(name="Flat 12")
+        self.other_household = Household.objects.create(name="Other flat")
+        HouseholdMember.objects.create(household=self.household, user=self.admin, role=HouseholdMember.ADMIN)
+        HouseholdMember.objects.create(household=self.household, user=self.member)
+        HouseholdMember.objects.create(household=self.other_household, user=self.outsider)
+
+    def make_chore(self, *, household=None, title="Wash dishes", assignee=None, due_date=None, status=Chore.TODO):
+        return Chore.objects.create(
+            household=household or self.household,
+            title=title,
+            assignee=assignee,
+            due_date=due_date or timezone.localdate(),
+            status=status,
+            created_by=self.admin,
+        )
+
+    def test_model_allows_open_chore_and_rejects_assignee_from_another_household(self):
+        chore = self.make_chore(assignee=None)
+        self.assertIsNone(chore.assignee)
+
+        invalid = Chore(
+            household=self.household,
+            title="Wrong household",
+            assignee=self.outsider,
+            due_date=timezone.localdate(),
+            created_by=self.admin,
+        )
+        with self.assertRaises(ValidationError) as error:
+            invalid.full_clean()
+        self.assertIn("assignee", error.exception.message_dict)
+
+    def test_board_groups_todo_cards_and_shows_card_fields_without_other_household_data(self):
+        self.make_chore(title="Open job")
+        assigned = self.make_chore(title="Bob's job", assignee=self.member)
+        self.make_chore(title="Completed job", status=Chore.DONE)
+        self.make_chore(household=self.other_household, title="Private job", assignee=self.outsider)
+
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("household-detail", args=[self.household.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Open")
+        self.assertContains(response, "alice@example.com")
+        self.assertContains(response, "bob@example.com")
+        self.assertContains(response, "Open job")
+        self.assertContains(response, "Bob&#x27;s job")
+        self.assertContains(response, "Assignee: bob@example.com")
+        self.assertContains(response, assigned.due_date.strftime("%b %-d, %Y"))
+        self.assertContains(response, "Status: To do")
+        self.assertNotContains(response, "Completed job")
+        self.assertNotContains(response, "Private job")
+
+    def test_overdue_uses_local_date_and_due_today_is_not_overdue(self):
+        today = timezone.localdate()
+        yesterday = today - timedelta(days=1)
+        self.make_chore(title="Late", due_date=yesterday)
+        self.make_chore(title="Due now", due_date=today)
+
+        self.client.force_login(self.member)
+        response = self.client.get(reverse("household-detail", args=[self.household.pk]))
+
+        self.assertContains(response, "Late")
+        self.assertContains(response, 'class="chore-card overdue"')
+        self.assertContains(response, "Overdue")
+        self.assertContains(response, "Due now")
+        self.assertNotContains(response, 'class="chore-card overdue"><h3>Due now')
+
+    def test_empty_state_when_household_has_no_todo_chores(self):
+        self.make_chore(title="Already done", status=Chore.DONE)
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse("household-detail", args=[self.household.pk]))
+
+        self.assertContains(response, "There are no chores to do right now.")
+        self.assertNotContains(response, "Already done")
+
+    def test_household_access_is_member_only_including_changed_household_id(self):
+        url = reverse("household-detail", args=[self.household.pk])
+        self.client.force_login(self.member)
+        self.assertEqual(self.client.get(url).status_code, 200)
+
+        self.client.force_login(self.outsider)
+        self.assertEqual(self.client.get(url).status_code, 404)
+        self.assertEqual(
+            self.client.get(reverse("household-detail", args=[self.other_household.pk])).status_code,
+            200,
+        )
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")

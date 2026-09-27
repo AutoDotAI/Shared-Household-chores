@@ -14,7 +14,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .forms import HouseholdCreateForm, SignInRequestForm
-from .models import Household, HouseholdMember, SignInLink
+from .models import Chore, Household, HouseholdMember, SignInLink
 
 
 def home(request):
@@ -44,7 +44,26 @@ def household_detail(request, household_id):
     household = get_object_or_404(Household, pk=household_id)
     if not HouseholdMember.objects.filter(household=household, user=request.user).exists():
         raise Http404
-    return render(request, "core/household_detail.html", {"household": household})
+    members = list(
+        HouseholdMember.objects.filter(household=household)
+        .select_related("user")
+        .order_by("joined_at", "pk")
+    )
+    chores = Chore.objects.filter(household=household, status=Chore.TODO).select_related("assignee")
+    open_chores = chores.filter(assignee__isnull=True).order_by("due_date", "pk")
+    for membership in members:
+        membership.chores = chores.filter(assignee=membership.user).order_by("due_date", "pk")
+    return render(
+        request,
+        "core/household_detail.html",
+        {
+            "household": household,
+            "members": members,
+            "open_chores": open_chores,
+            "has_chores": chores.exists(),
+            "today": timezone.localdate(),
+        },
+    )
 
 
 SIGN_IN_LINK_MAX_AGE = 15 * 60

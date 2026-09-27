@@ -1,0 +1,17 @@
+body {
+  margin: 0;
+  color: #202a32;
+  background: #f5f7f8;
+  font: 16px/1.5 system-ui, sans-serif;
+}
+
+.board-page { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+.board { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+.column { padding: 1rem; border-radius: 0.75rem; background: #e9eef0; }
+.column h2 { margin-top: 0; }
+.chore-card { margin: 0.75rem 0; padding: 1rem; border: 1px solid #d4dcdf; border-radius: 0.5rem; background: white; }
+.chore-card h3 { margin: 0 0 0.5rem; }
+.chore-card p { margin: 0.25rem 0; }
+.chore-card.overdue { border-color: #a83232; border-left: 5px solid #a83232; }
+.overdue-label { color: #a21e1e; font-weight: 700; }
+.empty-state { padding: 1rem; border-radius: 0.5rem; background: #e8f2e9; }

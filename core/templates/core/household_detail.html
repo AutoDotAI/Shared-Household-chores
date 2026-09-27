@@ -1,7 +1,30 @@
+{% load static %}
 <!doctype html>
 <html lang="en">
-  <head><meta charset="utf-8"><title>{{ household.name }}</title></head>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ household.name }} chores</title>
+    <link rel="stylesheet" href="{% static 'core/board.css' %}">
+  </head>
   <body>
-    <h1>{{ household.name }}</h1>
+    <main class="board-page">
+      <h1>{{ household.name }}</h1>
+      {% if not has_chores %}
+        <p class="empty-state">There are no chores to do right now.</p>
+      {% endif %}
+      <div class="board">
+        <section class="column" aria-labelledby="open-heading">
+          <h2 id="open-heading">Open</h2>
+          {% for chore in open_chores %}{% include 'core/chore_card.html' %}{% endfor %}
+        </section>
+        {% for member in members %}
+          <section class="column" aria-labelledby="member-{{ member.pk }}-heading">
+            <h2 id="member-{{ member.pk }}-heading">{{ member.user.email }}</h2>
+            {% for chore in member.chores %}{% include 'core/chore_card.html' %}{% endfor %}
+          </section>
+        {% endfor %}
+      </div>
+    </main>
   </body>
 </html>

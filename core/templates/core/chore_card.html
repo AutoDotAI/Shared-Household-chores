@@ -1,0 +1,7 @@
+<article class="chore-card{% if chore.due_date < today %} overdue{% endif %}">
+  <h3>{{ chore.title }}</h3>
+  {% if chore.assignee %}<p>Assignee: {{ chore.assignee.email }}</p>{% endif %}
+  <p>Due: <time datetime="{{ chore.due_date|date:'Y-m-d' }}">{{ chore.due_date|date:'M j, Y' }}</time></p>
+  <p>Status: To do</p>
+  {% if chore.due_date < today %}<p class="overdue-label">Overdue</p>{% endif %}
+</article>

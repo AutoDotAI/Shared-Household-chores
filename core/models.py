@@ -112,3 +112,36 @@ class HouseholdMember(models.Model):
 
     def __str__(self):
         return f"{self.user} in {self.household} ({self.role})"
+
+
+class Chore(models.Model):
+    TODO = "todo"
+    DONE = "done"
+    STATUS_CHOICES = [(TODO, "To do"), (DONE, "Done")]
+
+    household = models.ForeignKey(Household, on_delete=models.CASCADE, related_name="chores")
+    title = models.CharField(max_length=200)
+    assignee = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="assigned_chores",
+    )
+    due_date = models.DateField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=TODO)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="created_chores"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def clean(self):
+        super().clean()
+        if self.assignee_id and self.household_id and not HouseholdMember.objects.filter(
+            household_id=self.household_id, user_id=self.assignee_id
+        ).exists():
+            raise ValidationError({"assignee": "The assignee must be a member of this household."})
+
+    def __str__(self):
+        return self.title
