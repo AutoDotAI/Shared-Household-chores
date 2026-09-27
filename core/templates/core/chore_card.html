@@ -4,4 +4,11 @@
   <p>Due: <time datetime="{{ chore.due_date|date:'Y-m-d' }}">{{ chore.due_date|date:'M j, Y' }}</time></p>
   <p>Status: To do</p>
   {% if chore.due_date < today %}<p class="overdue-label">Overdue</p>{% endif %}
+  {% if is_admin %}
+    <p><a href="{% url 'chore-edit' chore.pk %}">Edit</a></p>
+    <form method="post" action="{% url 'chore-delete' chore.pk %}">
+      {% csrf_token %}
+      <button type="submit">Delete</button>
+    </form>
+  {% endif %}
 </article>

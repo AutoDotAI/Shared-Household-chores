@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Delete chore</title></head>
+  <body>
+    <main>
+      <h1>Delete chore</h1>
+      <p>Delete “{{ chore.title }}”?</p>
+      <form method="post">
+        {% csrf_token %}
+        <button type="submit">Delete chore</button>
+      </form>
+      <p><a href="{% url 'household-detail' household.pk %}">Cancel</a></p>
+    </main>
+  </body>
+</html>

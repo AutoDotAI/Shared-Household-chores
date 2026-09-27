@@ -10,6 +10,7 @@
   <body>
     <main class="board-page">
       <h1>{{ household.name }}</h1>
+      {% if is_admin %}<p><a href="{% url 'chore-create' household.pk %}">New chore</a></p>{% endif %}
       {% if not has_chores %}
         <p class="empty-state">There are no chores to do right now.</p>
       {% endif %}

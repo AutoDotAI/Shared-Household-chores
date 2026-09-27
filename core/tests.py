@@ -200,6 +200,100 @@ class ChoreBoardTests(TestCase):
             200,
         )
 
+    def test_admin_can_create_open_or_assigned_chore_and_board_shows_it(self):
+        self.client.force_login(self.admin)
+        url = reverse("chore-create", args=[self.household.pk])
+        self.assertEqual(self.client.get(url).status_code, 200)
+        response = self.client.post(url, {"title": "  Sweep floor  ", "due_date": "2026-10-01", "assignee": ""})
+        chore = Chore.objects.get()
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        self.assertEqual(chore.title, "Sweep floor")
+        self.assertEqual(chore.status, Chore.TODO)
+        self.assertIsNone(chore.assignee)
+        self.assertContains(self.client.get(response.url), "Sweep floor")
+
+        response = self.client.post(url, {"title": "Feed cat", "due_date": "2026-10-02", "assignee": str(self.member.pk)})
+        assigned = Chore.objects.get(title="Feed cat")
+        self.assertEqual(assigned.assignee, self.member)
+        self.assertContains(self.client.get(response.url), "Feed cat")
+        self.assertContains(self.client.get(response.url), "Assignee: bob@example.com")
+        self.assertContains(self.client.get(response.url), "New chore")
+        self.assertContains(self.client.get(response.url), "Edit")
+        self.assertContains(self.client.get(response.url), "Delete")
+        self.client.force_login(self.member)
+        board = self.client.get(response.url)
+        self.assertNotContains(board, "New chore")
+        self.assertNotContains(board, "Edit")
+        self.assertNotContains(board, "Delete")
+
+    def test_admin_can_edit_and_unassign_chore(self):
+        chore = self.make_chore(assignee=self.member)
+        self.client.force_login(self.admin)
+        url = reverse("chore-edit", args=[chore.pk])
+        self.assertEqual(self.client.get(url).status_code, 200)
+        response = self.client.post(url, {"title": "New title", "due_date": "2026-10-03", "assignee": ""})
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        chore.refresh_from_db()
+        self.assertEqual((chore.title, chore.due_date, chore.assignee), ("New title", timezone.datetime(2026, 10, 3).date(), None))
+        self.assertContains(self.client.get(response.url), "New title")
+        self.assertContains(self.client.get(response.url), "New title", count=1)
+
+    def test_empty_title_whitespace_title_and_missing_due_date_are_rejected_without_changes(self):
+        chore = self.make_chore(title="Original", assignee=self.member)
+        original = (chore.title, chore.due_date, chore.assignee_id, chore.status)
+        self.client.force_login(self.admin)
+        create_url = reverse("chore-create", args=[self.household.pk])
+        edit_url = reverse("chore-edit", args=[chore.pk])
+        for title, due_date in (("", "2026-10-04"), (" \t ", "2026-10-04"), ("Changed", "")):
+            with self.subTest(title=title, due_date=due_date):
+                response = self.client.post(create_url, {"title": title, "due_date": due_date, "assignee": ""})
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, 'class="errorlist"')
+                self.assertEqual(Chore.objects.count(), 1)
+                response = self.client.post(edit_url, {"title": title, "due_date": due_date, "assignee": str(self.member.pk)})
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, 'class="errorlist"')
+                chore.refresh_from_db()
+                self.assertEqual((chore.title, chore.due_date, chore.assignee_id, chore.status), original)
+
+    def test_foreign_assignee_is_rejected_for_create_and_edit(self):
+        chore = self.make_chore(title="Original", assignee=self.member)
+        self.client.force_login(self.admin)
+        for url, title in (
+            (reverse("chore-create", args=[self.household.pk]), "Invalid new"),
+            (reverse("chore-edit", args=[chore.pk]), "Invalid edit"),
+        ):
+            response = self.client.post(url, {"title": title, "due_date": "2026-10-05", "assignee": str(self.outsider.pk)})
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, 'class="errorlist"')
+            self.assertFalse(Chore.objects.filter(title=title).exists())
+        chore.refresh_from_db()
+        self.assertEqual((chore.title, chore.assignee_id), ("Original", self.member.pk))
+
+    def test_admin_can_delete_chore(self):
+        chore = self.make_chore()
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(reverse("chore-delete", args=[chore.pk])).status_code, 200)
+        response = self.client.post(reverse("chore-delete", args=[chore.pk]))
+        self.assertRedirects(response, reverse("household-detail", args=[self.household.pk]))
+        self.assertFalse(Chore.objects.filter(pk=chore.pk).exists())
+        self.assertNotContains(self.client.get(response.url), "Wash dishes")
+
+    def test_member_and_outsider_cannot_mutate_chore_or_create_it(self):
+        chore = self.make_chore(title="Protected", assignee=self.member)
+        create_url = reverse("chore-create", args=[self.household.pk])
+        edit_url = reverse("chore-edit", args=[chore.pk])
+        delete_url = reverse("chore-delete", args=[chore.pk])
+        for user in (self.member, self.outsider):
+            self.client.force_login(user)
+            for method, url in (("post", create_url), ("post", edit_url), ("post", delete_url), ("get", edit_url)):
+                response = getattr(self.client, method)(url, {"title": "Tampered", "due_date": "2026-10-06", "assignee": ""})
+                self.assertEqual(response.status_code, 404)
+            chore.refresh_from_db()
+            self.assertEqual((chore.title, chore.assignee_id), ("Protected", self.member.pk))
+            self.assertFalse(Chore.objects.filter(title="Tampered").exists())
+            self.assertEqual(Chore.objects.count(), 1)
+
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
 class PasswordlessSignInTests(TestCase):

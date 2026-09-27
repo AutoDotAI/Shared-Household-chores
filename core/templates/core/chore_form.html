@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{% if chore %}Edit{% else %}New{% endif %} chore</title></head>
+  <body>
+    <main>
+      <h1>{% if chore %}Edit chore{% else %}New chore{% endif %}</h1>
+      <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Save chore</button>
+      </form>
+      <p><a href="{% url 'household-detail' household.pk %}">Cancel</a></p>
+    </main>
+  </body>
+</html>

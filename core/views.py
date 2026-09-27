@@ -13,7 +13,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
-from .forms import HouseholdCreateForm, SignInRequestForm
+from .forms import ChoreForm, HouseholdCreateForm, SignInRequestForm
 from .models import Chore, Household, HouseholdMember, SignInLink
 
 
@@ -42,7 +42,8 @@ def create_household(request):
 @login_required(login_url="sign-in")
 def household_detail(request, household_id):
     household = get_object_or_404(Household, pk=household_id)
-    if not HouseholdMember.objects.filter(household=household, user=request.user).exists():
+    viewer_membership = HouseholdMember.objects.filter(household=household, user=request.user).first()
+    if viewer_membership is None:
         raise Http404
     members = list(
         HouseholdMember.objects.filter(household=household)
@@ -62,8 +63,59 @@ def household_detail(request, household_id):
             "open_chores": open_chores,
             "has_chores": chores.exists(),
             "today": timezone.localdate(),
+            "is_admin": viewer_membership.role == HouseholdMember.ADMIN,
         },
     )
+
+
+def _admin_household_or_404(user, household_id):
+    membership = get_object_or_404(
+        HouseholdMember.objects.select_related("household"),
+        household_id=household_id,
+        user=user,
+        role=HouseholdMember.ADMIN,
+    )
+    return membership.household
+
+
+@login_required(login_url="sign-in")
+def chore_create(request, household_id):
+    household = _admin_household_or_404(request.user, household_id)
+    if request.method == "POST":
+        form = ChoreForm(request.POST, household=household)
+        if form.is_valid():
+            chore = form.save(commit=False)
+            chore.created_by = request.user
+            chore.status = Chore.TODO
+            chore.save()
+            return redirect("household-detail", household_id=household.pk)
+    else:
+        form = ChoreForm(household=household)
+    return render(request, "core/chore_form.html", {"form": form, "household": household})
+
+
+@login_required(login_url="sign-in")
+def chore_edit(request, chore_id):
+    chore = get_object_or_404(Chore.objects.select_related("household"), pk=chore_id)
+    household = _admin_household_or_404(request.user, chore.household_id)
+    if request.method == "POST":
+        form = ChoreForm(request.POST, instance=chore, household=household)
+        if form.is_valid():
+            form.save()
+            return redirect("household-detail", household_id=household.pk)
+    else:
+        form = ChoreForm(instance=chore, household=household)
+    return render(request, "core/chore_form.html", {"form": form, "household": household, "chore": chore})
+
+
+@login_required(login_url="sign-in")
+def chore_delete(request, chore_id):
+    chore = get_object_or_404(Chore.objects.select_related("household"), pk=chore_id)
+    household = _admin_household_or_404(request.user, chore.household_id)
+    if request.method == "POST":
+        chore.delete()
+        return redirect("household-detail", household_id=household.pk)
+    return render(request, "core/chore_confirm_delete.html", {"chore": chore, "household": household})
 
 
 SIGN_IN_LINK_MAX_AGE = 15 * 60
